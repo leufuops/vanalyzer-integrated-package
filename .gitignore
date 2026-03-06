@@ -1,0 +1,95 @@
+# Sensitive configuration files
+.env
+*.env
+backups/*
+
+# Certificates and keys
+*.key
+*.crt
+*.pem
+*.p12
+*.pfx
+*.srl
+
+# Database files and backups
+*.sql
+*.dump
+*.db
+*.sqlite
+*.sqlite3
+
+# User credentials and secrets
+mbuser.json
+secrets/
+passwords.txt
+
+# Application data and logs
+reports/*
+logs/*
+app/logs/*
+traefik/config/certs/*.crt
+traefik/config/certs/*.key
+traefik/config/certs/*.srl
+traefik/config/logs/*.log
+
+# Cache and temporary files
+app/scripts/__pycache__/
+*.pyc
+*.pyo
+__pycache__/
+.cache/
+tmp/
+temp/
+
+# Development and testing files
+app/scripts/DoNotUpload-dev-localdbcon.py
+app/scripts/test-*.py
+app/scripts/testtimestamp.py
+Packager.sh
+
+# Third-party tools
+superset/
+pgadmin/*
+metabase/notemplate-backukp.sql
+/app/scripts/metabase/old
+
+# Docker volumes and data
+postgres_data/
+metabase_data/
+registry_data/
+traefik_data/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+certs/*.key
+certs/*.crt
+certs/*.pem
+certs/*.p12
+certs/*.pfx
+PROJECT_ANALYSIS_REPORT.md
+PROJECT_STATUS.md
+vanalyzer_presentation.html
+*.env.backup*
+*.launcher.py.backup*
+.*backups/*
+images/
+.claude/
+CODE_QUALITY_REVIEW*
+docs/
+test_vulncheck*
+CLAUDE.md
+!cvra_comprehensive_query.sql
+cvra/*
+app/scripts/vulncheck_pg/*.json
+CHANGELOG.md
+legacy-vanalyzer/*
+EXECUTIVE_SUMMARY.md

@@ -1,0 +1,311 @@
+================================================================================
+                vAnalyzer - Installation & Operations Guide
+================================================================================
+
+Version: 1.4.1
+Last Updated: October 2025
+Status: Production Ready
+
+================================================================================
+OVERVIEW
+================================================================================
+
+vAnalyzer is an enterprise vulnerability reporting platform that integrates
+with Vicarius vRx to provide risk-based vulnerability assessment. The platform
+enriches vulnerability data with threat intelligence from CISA KEV, FIRST EPSS,
+and optional advanced threat intelligence sources.
+
+Technology Stack: Docker Swarm, PostgreSQL, Metabase, Traefik, Python
+
+================================================================================
+SYSTEM REQUIREMENTS
+================================================================================
+
+Hardware
+- CPU: 4+ cores (8+ recommended)
+- RAM: 8GB minimum (16GB recommended)
+- Storage: 50GB minimum (SSD preferred)
+
+Software
+- OS: Linux (Ubuntu 20.04+, RHEL/Rocky/AlmaLinux 8+)
+- Docker: 20.10+ (installer provided)
+- Access: Root or sudo privileges
+
+Required Credentials
+- Vicarius Dashboard ID (e.g., company.vicarius.cloud or company)
+- Vicarius API Key (from Settings → API Keys in Vicarius dashboard)
+
+================================================================================
+INSTALLATION
+================================================================================
+
+Step 1: Install Docker
+    sudo ./vanalyzer install
+
+Step 2: Configure System
+    sudo ./vanalyzer init
+
+Configuration Parameters:
+  - Hostname: FQDN for SSL (e.g., vanalyzer.company.com)
+  - Dashboard ID: Vicarius instance identifier
+  - API Key: Vicarius authentication key
+  - Database Credentials: Username, database name, password
+  - Sync Interval: Hours between data refresh (default: 6)
+  - External Data: Enable CISA KEV/EPSS integration (recommended)
+  - Threat Intelligence: Enable advanced threat intelligence API (optional)
+
+Step 3: Deploy Stack
+    sudo ./vanalyzer deploy
+
+Deployment Time: 5-10 minutes
+Initial Data Sync: 15-30 minutes
+
+Step 4: Configure DNS
+Add hostname to your hosts file:
+  - Linux/Mac: /etc/hosts
+  - Windows: C:\Windows\System32\drivers\etc\hosts
+
+    SERVER_IP    vanalyzer.company.com
+
+Step 5: Access Dashboard
+1. Navigate to: https://[your-hostname]
+2. Accept self-signed certificate warning
+3. Login with default credentials:
+   - Username: vrxadmin@vrxadmin.com
+   - Password: Vicarius123!@#
+4. Change password immediately (Settings → Account)
+5. Configure database connection (Settings → Admin Settings → Databases)
+6. Wait for initial sync to complete (~15-30 minutes)
+
+================================================================================
+DAILY OPERATIONS
+================================================================================
+
+Monitoring Commands
+    sudo ./vanalyzer status      # Check service status
+    sudo ./vanalyzer health      # Run comprehensive health checks
+    sudo ./vanalyzer validate    # Verify configuration
+
+Log Management
+    sudo ./vanalyzer logs app        # Application sync logs
+    sudo ./vanalyzer logs appdb      # Database logs
+    sudo ./vanalyzer logs metabase   # Dashboard logs
+    sudo ./vanalyzer logs traefik    # Proxy/SSL logs
+
+Data Management
+    sudo ./vanalyzer update                      # Force immediate data sync
+    sudo ./vanalyzer backup                      # Create timestamped backup
+    sudo ./vanalyzer restore <backup_dir>        # Restore full system
+    sudo ./vanalyzer restore-metabase <backup>   # Restore dashboard only
+
+Data Synchronization
+- Automatic: Runs at configured interval (default: every 6 hours)
+- Manual: Execute sudo ./vanalyzer update
+- Monitor: sudo ./vanalyzer logs app | grep -i sync
+
+================================================================================
+OFFLINE/AIR-GAP DEPLOYMENT
+================================================================================
+
+Create Offline Bundle (Internet-Connected System)
+    sudo ./vanalyzer deploy
+    sudo ./vanalyzer bundle
+
+Deploy in Air-Gapped Environment
+    sudo ./vanalyzer import
+    sudo ./vanalyzer init
+    sudo ./vanalyzer deploy
+
+Note: Offline deployments will not receive external threat intelligence
+updates (KEV/EPSS).
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+Quick Diagnostics
+    sudo ./vanalyzer health      # Comprehensive system check
+    sudo ./vanalyzer validate    # Configuration validation
+    sudo ./vanalyzer status      # Service status overview
+
+Common Issues
+
+No Data in Dashboards
+    # Check sync logs
+    sudo ./vanalyzer logs app | grep -i sync
+
+    # Force manual sync
+    sudo ./vanalyzer update
+
+    # Wait 15-30 minutes for initial data population
+
+Cannot Access Dashboard
+    - Verify services: sudo ./vanalyzer status
+    - Check hostname is correctly added to hosts file
+    - Ensure you're accessing via FQDN (e.g., https://vanalyzer.company.com)
+    - Note: Direct IP access is not supported; FQDN is required due to
+      Traefik routing configuration
+
+Certificate Warnings
+    - Normal for self-signed certificates
+    - Click "Advanced" → "Proceed"
+    - For production, replace with valid certificates in traefik/config/certs/
+
+Database Connection Issues
+    - Verify credentials match configuration
+    - Check appdb service: sudo ./vanalyzer logs appdb
+    - Restart services: sudo ./vanalyzer deploy
+
+================================================================================
+COMMAND REFERENCE
+================================================================================
+
+Command                                  Purpose
+sudo ./vanalyzer install                 Install Docker runtime
+sudo ./vanalyzer init                    Interactive configuration wizard
+sudo ./vanalyzer deploy                  Deploy/restart all services
+sudo ./vanalyzer status                  Check service status
+sudo ./vanalyzer health                  Run health checks
+sudo ./vanalyzer validate                Validate configuration
+sudo ./vanalyzer logs <service>          View service logs
+sudo ./vanalyzer update                  Force data sync
+sudo ./vanalyzer backup                  Create backup
+sudo ./vanalyzer restore <dir>           Restore full system
+sudo ./vanalyzer restore-metabase <file> Restore dashboard only
+sudo ./vanalyzer bundle                  Create offline deployment package
+sudo ./vanalyzer import                  Import offline bundle
+sudo ./vanalyzer clean-logs              Clean log files
+sudo ./vanalyzer purge                   Remove all services and data
+
+================================================================================
+SECURITY BEST PRACTICES
+================================================================================
+
+Post-Installation
+- [ ] Change default Metabase password immediately
+- [ ] Configure database connection in Metabase
+- [ ] Verify initial sync completed successfully
+- [ ] Set up regular backup schedule
+- [ ] Test restore procedures
+
+Ongoing Operations
+- Schedule daily/weekly backups via cron
+- Monitor disk usage for database growth
+- Review sync logs for errors
+- Keep API credentials secure
+- Update SSL certificates before expiration
+
+================================================================================
+RECENT IMPROVEMENTS
+================================================================================
+
+Version 1.4.0 - Enterprise Transformation
+
+Unified CLI Management
+    Replaced 15+ separate bash scripts with single ./vanalyzer CLI tool,
+    reducing complexity by 93% and deployment steps by 50%. Consolidated
+    operations include install, init, deploy, backup, restore, logs, and
+    monitoring.
+
+Modular Architecture
+    Introduced library-based structure (core.sh, config.sh, docker.sh,
+    utils.sh, offline.sh) replacing monolithic scripts for improved
+    maintainability and updates.
+
+Configurable Operations
+    - Sync intervals now configurable via environment variables
+      (was hardcoded 4 hours)
+    - EPSS URL configurable (eliminates daily URL calculation failures)
+    - Optional feature support (KEV/EPSS/threat intelligence can be
+      enabled/disabled)
+
+Offline/Air-Gap Support
+    New bundle creation and import capabilities enable deployment in
+    disconnected environments with vanalyzer bundle and vanalyzer import
+    commands.
+
+Enhanced Monitoring
+    - Built-in health checks and validation (vanalyzer health,
+      vanalyzer validate)
+    - Comprehensive status reporting with service details
+    - Unified log access across all services
+    - Pre-deployment configuration verification
+
+Security Hardening
+    - Path validation to prevent traversal attacks
+    - Secure temporary file handling
+    - HTTPS verification enforced for all external requests
+    - Enhanced SSL/TLS certificate management
+
+Environment Auto-Detection
+    Automatic detection of OS type, online/offline mode, and Docker runtime
+    with intelligent configuration adjustments.
+
+Version 1.4.1 - Stability & Flexibility
+
+Critical Fixes
+    - Deployment Reliability: Fixed failures when optional features disabled;
+      placeholder secrets now created automatically
+    - Database Restore: Resolved active connection issues with automatic
+      service shutdown, connection termination, and clean database recreation
+    - Backup Compatibility: Support for multiple naming conventions
+      (vanalyzer_YYYYMMDD.sql and database_vanalyzer_YYYYMMDD.sql)
+
+New Features
+    - Metabase-Only Restore: Granular dashboard recovery without affecting
+      vulnerability database (restore-metabase command)
+    - AI-Assisted Development: Comprehensive CLAUDE.md documentation for
+      improved maintainability
+
+User Experience
+    - Vendor-neutral terminology in user-facing messages
+    - Enhanced configuration wizard clarity
+    - Streamlined documentation (34% reduction in README length)
+
+================================================================================
+ARCHITECTURE OVERVIEW
+================================================================================
+
+Service Components
+- app - Python data sync engine with scheduled jobs
+- appdb - PostgreSQL database for vulnerability data
+- metabase - Web analytics dashboard
+- traefik - Reverse proxy with SSL termination
+
+Data Flow
+1. Initial Sync: Fetches Vicarius vRx data and external threat intelligence
+2. Scheduled Sync: Runs every N hours (configurable)
+   - Refreshes base vulnerability tables
+   - Syncs active vulnerabilities
+   - Updates differential tracking tables
+   - Enriches with KEV/EPSS/threat intelligence data
+
+Key Features
+- Threat Intelligence Integration: CISA KEV, FIRST EPSS, optional advanced
+  sources
+- CVRA Scoring: Composite Vulnerability Risk Assessment (0-100 scale)
+- Automated Enrichment: Multi-source threat context
+- Analytics Dashboard: Metabase-powered visualizations
+
+================================================================================
+SUPPORT & RESOURCES
+================================================================================
+
+Documentation Files:
+    - README.md - Quick start and operations guide
+    - CLAUDE.md - Technical architecture and development guide
+    - EXECUTIVE_SUMMARY.md - Platform overview and improvements
+    - CHANGELOG.md - Version history
+
+Common Log Locations (inside containers):
+    - /var/log/scheduler_log.log - Sync scheduler logs
+    - /var/log/initialsync.log - Initial deployment sync logs
+
+Database Access:
+    docker exec -it $(docker ps -q -f name=appdb) psql -U <username> -d <database>
+
+================================================================================
+
+Document Version: 1.0
+Platform Version: 1.4.1
+Classification: Internal Use

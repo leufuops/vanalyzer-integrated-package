@@ -1,0 +1,689 @@
+#!/bin/bash
+# vAnalyzer Unified Management System v1.4
+# Unified deployment and management for vAnalyzer across all platforms
+
+set -euo pipefail
+
+# Script configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VERSION="1.4"
+ENV_FILE="${SCRIPT_DIR}/.env"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+NC='\033[0m' # No Color
+BOLD='\033[1m'
+
+# Environment detection variables
+OS_TYPE=""
+OFFLINE_MODE=""
+RUNTIME=""
+RUNTIME_VERSION=""
+
+# Detect operating system
+detect_os() {
+    if [[ -f /etc/redhat-release ]]; then
+        OS_TYPE="rhel"
+    elif [[ -f /etc/debian_version ]]; then
+        OS_TYPE="ubuntu"
+    elif [[ -f /etc/rocky-release ]]; then
+        OS_TYPE="rhel"
+    elif [[ -f /etc/almalinux-release ]]; then
+        OS_TYPE="rhel"
+    else
+        OS_TYPE="unknown"
+    fi
+}
+
+# Detect deployment mode (online/offline)
+detect_mode() {
+    # Check for Docker image tar files in images directory
+    if [[ -d "${SCRIPT_DIR}/images" ]] && find "${SCRIPT_DIR}/images" -name "*.tar" -type f | grep -q .; then
+        OFFLINE_MODE="true"
+    elif curl -s --head --max-time 5 https://google.com >/dev/null 2>&1; then
+        OFFLINE_MODE="false"
+    else
+        OFFLINE_MODE="true"
+    fi
+}
+
+# Detect container runtime
+detect_runtime() {
+    if command -v docker >/dev/null 2>&1; then
+        RUNTIME="docker"
+        RUNTIME_VERSION=$(docker --version 2>/dev/null | awk '{print $3}' | tr -d ',')
+    elif command -v podman >/dev/null 2>&1; then
+        RUNTIME="podman"
+        RUNTIME_VERSION=$(podman --version 2>/dev/null | awk '{print $3}')
+    else
+        RUNTIME="none"
+        RUNTIME_VERSION=""
+    fi
+}
+
+# Run all detections
+detect_environment() {
+    detect_os
+    detect_mode
+    detect_runtime
+}
+
+# Load library modules
+load_libraries() {
+    local libs=("core" "config" "docker" "utils")
+    
+    # Add offline library if in offline mode
+    [[ "$OFFLINE_MODE" == "true" ]] && libs+=("offline")
+    
+    for lib in "${libs[@]}"; do
+        local lib_file="${SCRIPT_DIR}/lib/${lib}.sh"
+        if [[ -f "$lib_file" ]]; then
+            source "$lib_file"
+        else
+            echo -e "${YELLOW}Warning: Library ${lib}.sh not found${NC}"
+        fi
+    done
+}
+
+# Show banner
+show_banner() {
+    echo -e "${CYAN}"
+    echo "╔════════════════════════════════════════════════╗"
+    echo "║           vAnalyzer Management v${VERSION}            ║"
+    echo "╠════════════════════════════════════════════════╣"
+    echo "║  Unified Deployment & Management System        ║"
+    echo "╚════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+}
+
+# Show environment info
+show_environment() {
+    echo -e "${BLUE}Environment Detection:${NC}"
+    echo -e "  OS Type:        ${GREEN}${OS_TYPE}${NC}"
+    echo -e "  Deployment:     ${GREEN}${OFFLINE_MODE:+$([ "$OFFLINE_MODE" == "true" ] && echo "Offline" || echo "Online")}${NC}"
+    echo -e "  Runtime:        ${GREEN}${RUNTIME}${NC}"
+    [[ -n "$RUNTIME_VERSION" ]] && echo -e "  Runtime Ver:    ${GREEN}${RUNTIME_VERSION}${NC}"
+    echo ""
+}
+
+# Command: init - Interactive setup
+cmd_init() {
+    show_banner
+    echo -e "${BOLD}Interactive vAnalyzer Setup${NC}"
+    echo ""
+    
+    # Load config library for interactive setup
+    if type -t init_configuration >/dev/null 2>&1; then
+        init_configuration
+    else
+        echo -e "${YELLOW}Configuration module not loaded. Using basic setup...${NC}"
+        basic_init
+    fi
+}
+
+# Command: install - Install Docker runtime
+cmd_install() {
+    show_banner
+    show_environment
+    
+    echo -e "${BOLD}Installing Docker Runtime${NC}"
+    echo ""
+    
+    # Check if Docker is already installed
+    if command_exists docker; then
+        echo -e "${GREEN}Docker is already installed${NC}"
+        docker --version
+        echo ""
+        
+        # Check if current user can access Docker
+        if docker info >/dev/null 2>&1; then
+            echo -e "${GREEN}Docker daemon is running and accessible${NC}"
+        elif sudo docker info >/dev/null 2>&1; then
+            echo -e "${YELLOW}Docker daemon is running but user lacks permissions${NC}"
+            echo "Current user needs to be in docker group"
+            echo "Running Docker configuration..."
+            if type -t configure_docker >/dev/null 2>&1; then
+                configure_docker
+            else
+                echo -e "${YELLOW}Adding user to docker group manually...${NC}"
+                sudo usermod -aG docker $(whoami)
+                echo -e "${CYAN}Please log out and back in, or run: newgrp docker${NC}"
+            fi
+        else
+            echo -e "${YELLOW}Docker daemon is not running${NC}"
+            echo "Starting Docker service..."
+            sudo systemctl start docker
+            sudo systemctl enable docker
+        fi
+        
+        # Check Swarm status
+        local swarm_state=$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null)
+        if [[ "$swarm_state" == "active" ]]; then
+            echo -e "${GREEN}Docker Swarm is already initialized${NC}"
+        else
+            echo ""
+            if confirm "Initialize Docker Swarm?" "y"; then
+                init_swarm
+            fi
+        fi
+        
+        return 0
+    fi
+    
+    # Install Docker using the library function
+    if type -t install_runtime >/dev/null 2>&1; then
+        install_runtime
+        
+        # Initialize Docker Swarm after installation
+        if command_exists docker; then
+            echo ""
+            echo -e "${BLUE}Initializing Docker Swarm...${NC}"
+            init_swarm
+            echo ""
+            echo -e "${GREEN}Docker installation completed successfully!${NC}"
+            echo -e "${YELLOW}Note: You may need to log out and back in for group changes to take effect${NC}"
+            echo -e "${YELLOW}Or run: newgrp docker${NC}"
+        fi
+    else
+        echo -e "${RED}Docker installation module not loaded${NC}"
+        echo -e "${YELLOW}Try using the legacy installation script:${NC}"
+        echo "  ${SCRIPT_DIR}/legacy-deploy/deploy_rhel.sh install"
+        return 1
+    fi
+}
+
+# Command: deploy - Full deployment
+cmd_deploy() {
+    show_banner
+    show_environment
+    
+    echo -e "${BOLD}Starting vAnalyzer Deployment${NC}"
+    echo ""
+    
+    # Check if configuration exists
+    if [[ ! -f "$ENV_FILE" ]]; then
+        echo -e "${YELLOW}No configuration found. Running initial setup...${NC}"
+        cmd_init
+    fi
+    
+    # Load deployment function
+    if type -t deploy_stack >/dev/null 2>&1; then
+        deploy_stack
+    else
+        echo -e "${YELLOW}Deployment module not loaded. Using legacy deployment...${NC}"
+        legacy_deploy
+    fi
+}
+
+# Command: update - Update deployment
+cmd_update() {
+    show_banner
+    show_environment
+    
+    echo -e "${BOLD}Updating vAnalyzer Deployment${NC}"
+    echo ""
+    
+    if type -t update_deployment >/dev/null 2>&1; then
+        update_deployment
+    else
+        echo -e "${YELLOW}Update module not loaded. Using legacy update...${NC}"
+        legacy_update
+    fi
+}
+
+# Command: status - Show status
+cmd_status() {
+    show_banner
+    
+    if type -t show_status >/dev/null 2>&1; then
+        show_status
+    else
+        echo -e "${YELLOW}Status module not loaded. Using basic status...${NC}"
+        docker stack ls
+        docker service ls
+    fi
+}
+
+# Command: logs - View logs
+cmd_logs() {
+    local service="${1:-}"
+    
+    if [[ -z "$service" ]]; then
+        echo "Usage: vanalyzer logs <service>"
+        echo "Available services: app, appdb, traefik, metabase"
+        return 1
+    fi
+    
+    # Validate service name to prevent injection
+    case "$service" in
+        app|appdb|traefik|metabase)
+            # Valid service names
+            ;;
+        *)
+            echo -e "${RED}Invalid service name: $service${NC}"
+            echo "Available services: app, appdb, traefik, metabase"
+            return 1
+            ;;
+    esac
+    
+    if type -t show_logs >/dev/null 2>&1; then
+        show_logs "$service"
+    else
+        docker service logs -f "vanalyzer-stack_${service}"
+    fi
+}
+
+# Command: health - Health check
+cmd_health() {
+    show_banner
+    
+    if type -t check_health >/dev/null 2>&1; then
+        check_health
+    else
+        echo -e "${YELLOW}Health module not loaded. Using basic health check...${NC}"
+        docker service ls --format "table {{.Name}}\t{{.Replicas}}"
+    fi
+}
+
+# Command: backup - Database backup
+cmd_backup() {
+    local backup_file="${1:-}"
+    
+    # Validate backup file path if provided
+    if [[ -n "$backup_file" ]]; then
+        # Ensure backup file is within expected directory structure
+        if [[ "$backup_file" =~ \.\./|^/ ]]; then
+            echo -e "${RED}Invalid backup file path: $backup_file${NC}"
+            return 1
+        fi
+    fi
+    
+    if type -t backup_database >/dev/null 2>&1; then
+        backup_database "$backup_file"
+    else
+        echo -e "${YELLOW}Backup module not loaded. Using db-backup.sh...${NC}"
+        if [[ -f "${SCRIPT_DIR}/db-backup.sh" ]]; then
+            "${SCRIPT_DIR}/db-backup.sh" backup "$backup_file"
+        else
+            echo -e "${RED}Backup script not found${NC}"
+        fi
+    fi
+}
+
+# Command: restore - Database restore
+cmd_restore() {
+    local backup_dir="${1:-}"
+    
+    if [[ -z "$backup_dir" ]]; then
+        echo "Usage: vanalyzer restore <backup_directory>"
+        echo ""
+        echo "Available backups:"
+        if [[ -d "${SCRIPT_DIR}/backups" ]]; then
+            ls -1 "${SCRIPT_DIR}/backups" | grep "^backup_" 2>/dev/null || echo "  No backups found"
+        else
+            echo "  No backup directory found"
+        fi
+        return 1
+    fi
+    
+    # Validate backup directory path
+    if [[ "$backup_dir" =~ \.\./|^/ ]]; then
+        echo -e "${RED}Invalid backup directory path: $backup_dir${NC}"
+        return 1
+    fi
+    
+    # Ensure backup directory exists and is within expected location
+    local full_backup_path="${SCRIPT_DIR}/backups/${backup_dir}"
+    if [[ ! -d "$full_backup_path" ]]; then
+        echo -e "${RED}Backup directory not found: $backup_dir${NC}"
+        return 1
+    fi
+    
+    if type -t restore_database >/dev/null 2>&1; then
+        restore_database "$backup_dir"
+    else
+        echo -e "${YELLOW}Using db-backup.sh...${NC}"
+        if [[ -f "${SCRIPT_DIR}/db-backup.sh" ]]; then
+            "${SCRIPT_DIR}/db-backup.sh" restore "$backup_dir"
+        else
+            echo -e "${RED}Backup script not found${NC}"
+        fi
+    fi
+}
+
+# Command: clean-logs - Clean logs and temp files
+cmd_clean_logs() {
+    show_banner
+    
+    if type -t clean_logs >/dev/null 2>&1; then
+        clean_logs
+    else
+        echo "Cleaning logs and temporary files..."
+        find "${SCRIPT_DIR}/app/logs" -type f -not -name ".gitignore" -delete 2>/dev/null || true
+        find "${SCRIPT_DIR}/app/reports" -type f -not -name ".gitignore" -delete 2>/dev/null || true
+        echo -e "${GREEN}✓ Cleaning completed${NC}"
+    fi
+}
+
+# Command: clean-docker - Clean Docker resources
+cmd_clean_docker() {
+    show_banner
+    
+    if type -t cleanup_resources >/dev/null 2>&1; then
+        cleanup_resources
+    else
+        echo -e "${YELLOW}Cleanup module not loaded. Using basic cleanup...${NC}"
+        docker system prune -f
+    fi
+}
+
+# Command: purge - Complete removal
+cmd_purge() {
+    show_banner
+    
+    if type -t purge_all >/dev/null 2>&1; then
+        purge_all
+    else
+        echo -e "${YELLOW}Purge module not loaded. Using basic purge...${NC}"
+        echo -e "${RED}${BOLD}WARNING: This will completely remove vAnalyzer and ALL data!${NC}"
+        echo -n "Are you sure you want to proceed? (type 'yes' to confirm): "
+        read -r confirmation
+        
+        if [[ "$confirmation" != "yes" ]]; then
+            echo "Purge cancelled"
+            return 0
+        fi
+        
+        docker stack rm vanalyzer-stack 2>/dev/null || true
+        docker system prune -af --volumes
+    fi
+}
+
+# Rollback command removed - was non-functional stub
+# Use backup/restore for data recovery instead
+
+# Command: bundle - Create offline bundle
+cmd_bundle() {
+    show_banner
+    
+    if type -t create_bundle >/dev/null 2>&1; then
+        create_bundle
+    else
+        echo -e "${YELLOW}Bundle module not loaded. Using docker-images.sh...${NC}"
+        if [[ -f "${SCRIPT_DIR}/docker-images.sh" ]]; then
+            "${SCRIPT_DIR}/docker-images.sh" export
+        else
+            echo -e "${RED}Docker images script not found${NC}"
+        fi
+    fi
+}
+
+# Command: import - Import offline bundle
+cmd_import() {
+    local bundle_file="${1:-}"
+    
+    show_banner
+    
+    if type -t import_bundle >/dev/null 2>&1; then
+        import_bundle "$bundle_file"
+    else
+        echo -e "${YELLOW}Import module not loaded. Using docker-images.sh...${NC}"
+        if [[ -f "${SCRIPT_DIR}/docker-images.sh" ]]; then
+            "${SCRIPT_DIR}/docker-images.sh" import
+        else
+            echo -e "${RED}Docker images script not found${NC}"
+        fi
+    fi
+}
+
+# Command: validate - Validate configuration
+cmd_validate() {
+    show_banner
+    show_environment
+    
+    if type -t validate_configuration >/dev/null 2>&1; then
+        validate_configuration
+    else
+        echo -e "${YELLOW}Validation module not loaded. Running basic checks...${NC}"
+        echo -e "  Configuration: $([ -f "$ENV_FILE" ] && echo "✓" || echo "✗") .env"
+        echo -e "  Docker:        $([ "$RUNTIME" != "none" ] && echo "✓" || echo "✗") $RUNTIME"
+    fi
+}
+
+# Command: certs - Certificate management
+cmd_certs() {
+    local action="${1:-generate}"
+    local hostname="${2:-}"
+    
+    if type -t manage_certificates >/dev/null 2>&1; then
+        manage_certificates "$action" "$hostname"
+    else
+        echo -e "${YELLOW}Certificate module not loaded. Using generate-ssl-certs.sh...${NC}"
+        if [[ -f "${SCRIPT_DIR}/generate-ssl-certs.sh" ]]; then
+            case "$action" in
+                generate|create)
+                    "${SCRIPT_DIR}/generate-ssl-certs.sh" create-all "$hostname"
+                    ;;
+                *)
+                    "${SCRIPT_DIR}/generate-ssl-certs.sh" "$action" "$hostname"
+                    ;;
+            esac
+        else
+            echo -e "${RED}Certificate script not found${NC}"
+        fi
+    fi
+}
+
+# Command: version - Show version
+cmd_version() {
+    show_banner
+    echo "vAnalyzer Version: ${VERSION}"
+    if [[ -f "$ENV_FILE" ]]; then
+        echo "Configuration File: Found (.env)"
+    else
+        echo "Configuration File: Not found"
+    fi
+    echo ""
+    show_environment
+}
+
+# Command: help - Show help
+cmd_help() {
+    local command="${1:-}"
+    
+    if [[ -n "$command" ]]; then
+        show_command_help "$command"
+    else
+        show_general_help
+    fi
+}
+
+# Show general help
+show_general_help() {
+    show_banner
+    
+    echo -e "${BOLD}Usage:${NC} vanalyzer <command> [options]"
+    echo ""
+    echo -e "${BOLD}Setup Commands:${NC}"
+    echo "  install       - Install Docker runtime"
+    echo "  init          - Interactive configuration setup"
+    echo ""
+    echo -e "${BOLD}Deployment Commands:${NC}"
+    echo "  deploy        - Deploy vAnalyzer stack"
+    echo "  update        - Update existing deployment"
+    echo ""
+    echo -e "${BOLD}Management Commands:${NC}"
+    echo "  status        - Show deployment status"
+    echo "  logs <svc>    - View service logs"
+    echo "  health        - Run health checks"
+    echo ""
+    echo -e "${BOLD}Data Commands:${NC}"
+    echo "  backup        - Backup database"
+    echo "  restore <dir> - Restore from backup directory"
+    echo ""
+    echo -e "${BOLD}Maintenance Commands:${NC}"
+    echo "  clean-logs    - Clean logs and temp files"
+    echo "  clean-docker  - Clean Docker resources"
+    echo "  purge         - Remove Docker and ALL data (DESTRUCTIVE)"
+    echo ""
+    echo -e "${BOLD}Offline Commands:${NC}"
+    echo "  bundle        - Create offline deployment bundle"
+    echo "  import [file] - Import and deploy bundle"
+    echo ""
+    echo -e "${BOLD}Utility Commands:${NC}"
+    echo "  validate      - Validate configuration"
+    echo "  certs [act]   - Manage SSL certificates"
+    echo "  version       - Show version information"
+    echo "  help [cmd]    - Show help"
+    echo ""
+    echo -e "${CYAN}For command-specific help:${NC} vanalyzer help <command>"
+}
+
+# Show command-specific help
+show_command_help() {
+    local cmd="$1"
+    
+    case "$cmd" in
+        install)
+            echo "Usage: vanalyzer install"
+            echo "Install Docker runtime and initialize Swarm mode"
+            echo ""
+            echo "This command will:"
+            echo "  - Install Docker CE (OS-specific)"
+            echo "  - Configure Docker service"
+            echo "  - Initialize Docker Swarm"
+            echo "  - Add current user to docker group"
+            ;;
+        init)
+            echo "Usage: vanalyzer init"
+            echo "Interactive setup wizard for vAnalyzer configuration"
+            ;;
+        deploy)
+            echo "Usage: vanalyzer deploy"
+            echo "Deploy vAnalyzer stack with automatic environment detection"
+            ;;
+        logs)
+            echo "Usage: vanalyzer logs <service>"
+            echo "View logs for a specific service"
+            echo "Services: app, appdb, traefik, metabase"
+            ;;
+        purge)
+            echo "Usage: vanalyzer purge"
+            echo "DESTRUCTIVE: Completely remove Docker and ALL vAnalyzer data"
+            echo ""
+            echo "This command will:"
+            echo "  - Stop and remove all containers, images, volumes"
+            echo "  - Uninstall Docker packages (OS-specific)"
+            echo "  - Remove Docker configuration and data directories"
+            echo "  - Remove Docker repositories and GPG keys"
+            echo "  - Clean up Docker group and symlinks"
+            echo "  - Remove vAnalyzer configuration files"
+            echo ""
+            echo "WARNING: This action cannot be undone!"
+            ;;
+        *)
+            echo "No specific help available for: $cmd"
+            ;;
+    esac
+}
+
+# Fallback functions for when libraries aren't loaded
+basic_init() {
+    echo "Running basic initialization..."
+    
+    # Copy .env.example if it exists
+    if [[ -f "${SCRIPT_DIR}/.env.example" ]] && [[ ! -f "$ENV_FILE" ]]; then
+        cp "${SCRIPT_DIR}/.env.example" "$ENV_FILE"
+        echo -e "${GREEN}✓ Created .env from template${NC}"
+    fi
+    
+    echo -e "${YELLOW}Please edit .env file manually for now${NC}"
+}
+
+legacy_deploy() {
+    echo "Using legacy deployment method..."
+    
+    # Determine which legacy script to use
+    local deploy_script=""
+    if [[ "$OS_TYPE" == "rhel" ]] && [[ -f "${SCRIPT_DIR}/deploy_rhel.sh" ]]; then
+        deploy_script="${SCRIPT_DIR}/deploy_rhel.sh"
+    elif [[ -f "${SCRIPT_DIR}/deploy.sh" ]]; then
+        deploy_script="${SCRIPT_DIR}/deploy.sh"
+    fi
+    
+    if [[ -n "$deploy_script" ]]; then
+        echo -e "${CYAN}Executing: $deploy_script deploy${NC}"
+        exec "$deploy_script" deploy
+    else
+        echo -e "${RED}No deployment script found${NC}"
+        exit 1
+    fi
+}
+
+legacy_update() {
+    echo "Using legacy update method..."
+    
+    # Determine which legacy script to use
+    local deploy_script=""
+    if [[ "$OS_TYPE" == "rhel" ]] && [[ -f "${SCRIPT_DIR}/deploy_rhel.sh" ]]; then
+        deploy_script="${SCRIPT_DIR}/deploy_rhel.sh"
+    elif [[ -f "${SCRIPT_DIR}/deploy.sh" ]]; then
+        deploy_script="${SCRIPT_DIR}/deploy.sh"
+    fi
+    
+    if [[ -n "$deploy_script" ]]; then
+        echo -e "${CYAN}Executing: $deploy_script update${NC}"
+        exec "$deploy_script" update
+    else
+        echo -e "${RED}No deployment script found${NC}"
+        exit 1
+    fi
+}
+
+# Main execution
+main() {
+    # Detect environment first
+    detect_environment
+    
+    # Load libraries if they exist
+    load_libraries
+    
+    # Route command
+    case "${1:-help}" in
+        init)     cmd_init ;;
+        install)  cmd_install ;;
+        deploy)   cmd_deploy ;;
+        update)   cmd_update ;;
+        status)   cmd_status ;;
+        logs)     cmd_logs "${@:2}" ;;
+        health)   cmd_health ;;
+        backup)   cmd_backup "${@:2}" ;;
+        restore)  cmd_restore "${@:2}" ;;
+        clean-logs)    cmd_clean_logs ;;
+        clean-docker)  cmd_clean_docker ;;
+        # Legacy aliases
+        clean)    cmd_clean_logs ;;
+        cleanup)  cmd_clean_docker ;;
+        purge)    cmd_purge ;;
+        bundle)   cmd_bundle ;;
+        import)   cmd_import "${@:2}" ;;
+        validate) cmd_validate ;;
+        certs)    cmd_certs "${@:2}" ;;
+        version)  cmd_version ;;
+        help)     cmd_help "${@:2}" ;;
+        *)        
+            echo -e "${RED}Unknown command: $1${NC}"
+            echo ""
+            cmd_help
+            exit 1
+            ;;
+    esac
+}
+
+# Execute main function
+main "$@"

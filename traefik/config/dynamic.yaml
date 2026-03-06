@@ -1,0 +1,6 @@
+# ./config/dynamic.yaml
+tls:
+  certificates:
+    - certFile: /etc/traefik/certs/vanalyzer-ubuntu.lab.crt
+      keyFile: /etc/traefik/certs/vanalyzer-ubuntu.lab.key
+

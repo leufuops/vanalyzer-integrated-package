@@ -1,0 +1,307 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  appdb:
+    image: vrx-reports-appdb:${VERSION:-1.4}
+    environment:
+      POSTGRES_DB_FILE: /run/secrets/postgres_db
+      POSTGRES_USER_FILE: /run/secrets/postgres_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - vanalyzer-network
+    secrets:
+      - postgres_db
+      - postgres_user
+      - postgres_password
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+        max_attempts: 3
+        window: 300s
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  # Main Application
+  app:
+    image: vrx-reports-app:${VERSION:-1.4}
+    depends_on:
+      - appdb
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - DATABASE_HOST=appdb
+      - DATABASE_PORT=5432
+      - SYNC_INTERVAL=${SYNC_INTERVAL:-6}
+      - EXTERNAL_DATA_ENABLED=${EXTERNAL_DATA_ENABLED:-false}
+      - EPSS_URL=${EPSS_URL:-https://epss.empiricalsecurity.com/epss_scores-current.csv.gz}
+      - KEV_URL=${KEV_URL:-https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json}
+      - VULNCHECK_ENABLED=${VULNCHECK_ENABLED:-false}
+    volumes:
+      - type: bind
+        source: ./app/reports
+        target: /usr/src/app/reports
+      - type: bind
+        source: ./app/logs
+        target: /var/log
+      - type: bind
+        source: ./app/scripts
+        target: /usr/src/app/scripts
+      - type: bind
+        source: /etc/localtime
+        target: /etc/localtime
+        read_only: true
+    networks:
+      - vanalyzer-network
+    secrets:
+      # Vicarius API
+      - api_key
+      - dashboard_id
+      
+      # PostgreSQL Database
+      - postgres_db
+      - postgres_user
+      - postgres_password
+      
+      # Tenable.io Integration
+      - tenable_access_key
+      - tenable_secret_key
+      
+      # CrowdStrike Falcon Spotlight Integration
+      - falcon_client_id
+      - falcon_client_secret
+      - falcon_base_url
+      
+      # Qualys VMDR Integration
+      - qualys_username
+      - qualys_password
+      - qualys_api_url
+      
+      # ServiceNow Integration
+      - servicenow_user
+      - servicenow_password
+      - servicenow_instance_url
+      
+      # Microsoft Defender for Endpoint (MDE) Integration
+      - mde_tenant_id
+      - mde_client_id
+      - mde_client_secret
+      
+      # Automox Integration
+      - automox_api_key
+      - automox_org_id
+      
+      # Wiz Integration
+      - wiz_client_id
+      - wiz_client_secret
+      - wiz_api_endpoint_url
+      
+      # Optional Tools
+      - optional_tools
+      - vulncheck_api_key
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+        max_attempts: 3
+        window: 300s
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  # Traefik Reverse Proxy
+  traefik:
+    image: traefik:${TRAEFIK_VERSION:-latest}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Mount Docker socket for service discovery (read-only)
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+        read_only: true
+      - type: bind
+        source: ./traefik/config/traefik.yaml
+        target: /etc/traefik/traefik.yaml
+        read_only: true
+      - type: bind
+        source: ./traefik/config/dynamic.yaml
+        target: /etc/traefik/dynamic.yaml
+        read_only: true
+      - type: bind
+        source: ./traefik/config/conf/
+        target: /etc/traefik/conf/
+      - type: bind
+        source: ./traefik/config/certs/
+        target: /etc/traefik/certs/
+      - type: bind
+        source: ./traefik/config/logs/
+        target: /var/log/traefik/
+      - type: volume
+        source: traefik_data
+        target: /data
+      - type: bind
+        source: /etc/localtime
+        target: /etc/localtime
+        read_only: true
+    environment:
+      - TRAEFIK_LOG_LEVEL=${LOG_LEVEL:-INFO}
+    networks:
+      - vanalyzer-network
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+        max_attempts: 3
+        window: 300s
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+  # Metabase Analytics Dashboard
+  metabase:
+    image: metabase/metabase:${METABASE_VERSION:-v0.55.x}
+    depends_on:
+      - appdb
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_DBNAME: metabase
+      MB_DB_PORT: 5432
+      MB_DB_HOST: appdb
+      MB_DB_USER_FILE: /run/secrets/postgres_user
+      MB_DB_PASS_FILE: /run/secrets/postgres_password
+      JAVA_OPTS: "-Xmx1280m"
+    volumes:
+      - type: volume
+        source: metabase_data
+        target: /metabase-data
+      - type: bind
+        source: /etc/localtime
+        target: /etc/localtime
+        read_only: true
+    networks:
+      - vanalyzer-network
+    secrets:
+      - postgres_user
+      - postgres_password
+      - postgres_db
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.metabase.rule=Host(`${METABASE_HOST}`)"
+      - "traefik.http.routers.metabase.entrypoints=web,websecure"
+      - "traefik.http.routers.metabase.tls=true"
+      - "traefik.http.services.metabase.loadbalancer.server.port=3000"
+#      - "traefik.http.middlewares.metabase-auth.basicauth.users=${METABASE_BASIC_AUTH:-}"
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+        max_attempts: 3
+        window: 300s
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1536M
+
+networks:
+  vanalyzer-network:
+    driver: overlay
+    attachable: true
+    driver_opts:
+      encrypted: "true"
+
+volumes:
+  postgres_data:
+    driver: local
+  metabase_data:
+    driver: local
+  traefik_data:
+    driver: local
+
+secrets:
+  # Vicarius API credentials
+  api_key:
+    external: true
+  dashboard_id:
+    external: true
+  
+  # PostgreSQL Database credentials
+  postgres_db:
+    external: true
+  postgres_user:
+    external: true
+  postgres_password:
+    external: true
+  
+  # Tenable.io credentials
+  tenable_access_key:
+    external: true
+  tenable_secret_key:
+    external: true
+  
+  # CrowdStrike Falcon Spotlight credentials
+  falcon_client_id:
+    external: true
+  falcon_client_secret:
+    external: true
+  falcon_base_url:
+    external: true
+  
+  # Qualys VMDR credentials
+  qualys_username:
+    external: true
+  qualys_password:
+    external: true
+  qualys_api_url:
+    external: true
+  
+  # ServiceNow credentials
+  servicenow_user:
+    external: true
+  servicenow_password:
+    external: true
+  servicenow_instance_url:
+    external: true
+  
+  # Microsoft Defender for Endpoint (MDE) credentials
+  mde_tenant_id:
+    external: true
+  mde_client_id:
+    external: true
+  mde_client_secret:
+    external: true
+  
+  # Automox credentials
+  automox_api_key:
+    external: true
+  automox_org_id:
+    external: true
+  
+  # Wiz credentials
+  wiz_client_id:
+    external: true
+  wiz_client_secret:
+    external: true
+  wiz_api_endpoint_url:
+    external: true
+  
+  # Optional integrations
+  optional_tools:
+    external: true
+  vulncheck_api_key:
+    external: true
