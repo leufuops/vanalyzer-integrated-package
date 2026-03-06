@@ -51,6 +51,15 @@ init_configuration() {
 interactive_simple_setup() {
     echo -e "${BOLD}vAnalyzer Configuration Setup${NC}"
     echo ""
+
+    # Integration status flags (used in summary at the end)
+    local tenable_enabled="false"
+    local falcon_enabled="false"
+    local qualys_enabled="false"
+    local servicenow_enabled="false"
+    local mde_enabled="false"
+    local automox_enabled="false"
+    local wiz_enabled="false"
     
     # ============================================================================
     # CORE VICARIUS CONFIGURATION
@@ -236,6 +245,8 @@ interactive_simple_setup() {
     read -p "Enable Tenable.io integration? [y/N]: " enable_tenable
     
     if [[ "$enable_tenable" =~ ^[Yy] ]]; then
+        tenable_enabled="true"
+
         # Tenable Access Key
         local tenable_access_key=""
         while [[ -z "$tenable_access_key" ]]; do
@@ -290,6 +301,8 @@ interactive_simple_setup() {
     read -p "Enable CrowdStrike Falcon Spotlight integration? [y/N]: " enable_falcon
     
     if [[ "$enable_falcon" =~ ^[Yy] ]]; then
+        falcon_enabled="true"
+
         # Falcon API Region Selection
         echo ""
         echo "Select Falcon API Region:"
@@ -379,6 +392,8 @@ interactive_simple_setup() {
     read -p "Enable Qualys VMDR integration? [y/N]: " enable_qualys
     
     if [[ "$enable_qualys" =~ ^[Yy] ]]; then
+        qualys_enabled="true"
+
         # Qualys Platform Selection
         echo ""
         echo "Select Qualys Platform:"
@@ -476,6 +491,8 @@ interactive_simple_setup() {
     read -p "Enable ServiceNow integration? [y/N]: " enable_servicenow
 
     if [[ "$enable_servicenow" =~ ^[Yy] ]]; then
+        servicenow_enabled="true"
+
         # ServiceNow Instance URL
         local servicenow_instance_url=""
         while [[ -z "$servicenow_instance_url" ]]; do
@@ -546,6 +563,7 @@ interactive_simple_setup() {
     read -p "Enable Microsoft Defender for Endpoint integration? [y/N]: " enable_mde
 
     if [[ "$enable_mde" =~ ^[Yy] ]]; then
+        mde_enabled="true"
 
         # MDE Tenant ID
         local mde_tenant_id=""
@@ -625,6 +643,7 @@ interactive_simple_setup() {
     read -p "Enable Automox integration? [y/N]: " enable_automox
 
     if [[ "$enable_automox" =~ ^[Yy] ]]; then
+        automox_enabled="true"
 
         # Automox API Key
         local automox_api_key=""
@@ -685,6 +704,7 @@ interactive_simple_setup() {
     read -p "Enable Wiz integration? [y/N]: " enable_wiz
 
     if [[ "$enable_wiz" =~ ^[Yy] ]]; then
+        wiz_enabled="true"
 
         # Wiz Client ID
         local wiz_client_id=""
@@ -705,42 +725,17 @@ interactive_simple_setup() {
             fi
         done
 
-        # Wiz API Endpoint URL
-        echo ""
-        echo "Select Wiz API Endpoint:"
-        echo "  1. US1   (https://api.us1.app.wiz.io/graphql)"
-        echo "  2. US2   (https://api.us2.app.wiz.io/graphql)"
-        echo "  3. EU1   (https://api.eu1.app.wiz.io/graphql)"
-        echo "  4. EU2   (https://api.eu2.app.wiz.io/graphql)"
-        echo "  5. GOV   (https://api.gov.wiz.io/graphql)"
-        echo "  6. Custom URL"
-
-        local wiz_endpoint_choice=""
-        read -p "Select endpoint [1-6] (default: 1): " wiz_endpoint_choice
-        wiz_endpoint_choice="${wiz_endpoint_choice:-1}"
-
+        # Wiz API Endpoint URL (direct input, no menu)
         local wiz_api_endpoint_url=""
-        case $wiz_endpoint_choice in
-            1) wiz_api_endpoint_url="https://api.us1.app.wiz.io/graphql" ;;
-            2) wiz_api_endpoint_url="https://api.us2.app.wiz.io/graphql" ;;
-            3) wiz_api_endpoint_url="https://api.eu1.app.wiz.io/graphql" ;;
-            4) wiz_api_endpoint_url="https://api.eu2.app.wiz.io/graphql" ;;
-            5) wiz_api_endpoint_url="https://api.gov.wiz.io/graphql" ;;
-            6)
-                read -p "Enter custom Wiz API Endpoint URL: " wiz_api_endpoint_url
-                if [[ -z "$wiz_api_endpoint_url" ]]; then
-                    log_error "API Endpoint URL is required"
-                    wiz_api_endpoint_url="https://api.us1.app.wiz.io/graphql"
-                    log_warning "Using default: US1"
-                fi
-                ;;
-            *)
-                wiz_api_endpoint_url="https://api.us1.app.wiz.io/graphql"
-                log_warning "Invalid selection, using default: US1"
-                ;;
-        esac
-
-        echo "Selected: $wiz_api_endpoint_url"
+        while [[ -z "$wiz_api_endpoint_url" ]]; do
+            read -p "Enter Wiz API Endpoint URL (e.g., https://api.us1.app.wiz.io/graphql): " wiz_api_endpoint_url
+            if [[ -z "$wiz_api_endpoint_url" ]]; then
+                log_error "Wiz API Endpoint URL is required"
+            elif [[ ! "$wiz_api_endpoint_url" =~ ^https?:// ]]; then
+                log_error "Invalid URL format. Must start with http:// or https://"
+                wiz_api_endpoint_url=""
+            fi
+        done
 
         # Create Wiz secrets
         if ! create_or_update_secret "wiz_client_id" "$wiz_client_id"; then
@@ -769,7 +764,7 @@ interactive_simple_setup() {
         # Create placeholder secrets to satisfy Docker Compose requirements
         create_or_update_secret "wiz_client_id" "not_configured"
         create_or_update_secret "wiz_client_secret" "not_configured"
-        create_or_update_secret "wiz_api_endpoint_url" "https://api.us1.app.wiz.io/graphql"
+        create_or_update_secret "wiz_api_endpoint_url" "not_configured"
         log_info "Wiz integration disabled"
     fi
 
@@ -878,86 +873,15 @@ EOF
     echo "  Sync Interval:   ${sync_interval}h"
     echo ""
     echo "Integrations:"
-    echo "  KEV + EPSS:      $([ "$external_data_enabled" = "true" ] && echo "✓ Enabled" || echo "✗ Disabled")"
-    echo "  VulnCheck:       $([ "$vulncheck_enabled" = "true" ] && echo "✓ Enabled" || echo "✗ Disabled")"
-    
-    # Check Tenable
-    if docker secret ls --format "{{.Name}}" 2>/dev/null | grep -q "^tenable_access_key$"; then
-        if docker secret inspect tenable_access_key --format '{{.Spec.Data}}' 2>/dev/null | base64 -d | grep -qv "not_configured"; then
-            echo "  Tenable.io:      ✓ Enabled"
-        else
-            echo "  Tenable.io:      ✗ Disabled"
-        fi
-    else
-        echo "  Tenable.io:      ✗ Disabled"
-    fi
-    
-    # Check Falcon
-    if docker secret ls --format "{{.Name}}" 2>/dev/null | grep -q "^falcon_client_id$"; then
-        if docker secret inspect falcon_client_id --format '{{.Spec.Data}}' 2>/dev/null | base64 -d | grep -qv "not_configured"; then
-            echo "  Falcon Spotlight: ✓ Enabled"
-        else
-            echo "  Falcon Spotlight: ✗ Disabled"
-        fi
-    else
-        echo "  Falcon Spotlight: ✗ Disabled"
-    fi
-    
-    # Check Qualys
-    if docker secret ls --format "{{.Name}}" 2>/dev/null | grep -q "^qualys_username$"; then
-        if docker secret inspect qualys_username --format '{{.Spec.Data}}' 2>/dev/null | base64 -d | grep -qv "not_configured"; then
-            echo "  Qualys VMDR:     ✓ Enabled"
-        else
-            echo "  Qualys VMDR:     ✗ Disabled"
-        fi
-    else
-        echo "  Qualys VMDR:     ✗ Disabled"
-    fi
-
-    # Check ServiceNow
-    if docker secret ls --format "{{.Name}}" 2>/dev/null | grep -q "^servicenow_user$"; then
-        if docker secret inspect servicenow_user --format '{{.Spec.Data}}' 2>/dev/null | base64 -d | grep -qv "not_configured"; then
-            echo "  ServiceNow:      ✓ Enabled"
-        else
-            echo "  ServiceNow:      ✗ Disabled"
-        fi
-    else
-        echo "  ServiceNow:      ✗ Disabled"
-    fi
-
-    # Check MDE
-    if docker secret ls --format "{{.Name}}" 2>/dev/null | grep -q "^mde_client_id$"; then
-        if docker secret inspect mde_client_id --format '{{.Spec.Data}}' 2>/dev/null | base64 -d | grep -qv "not_configured"; then
-            echo "  MS Defender:     ✓ Enabled"
-        else
-            echo "  MS Defender:     ✗ Disabled"
-        fi
-    else
-        echo "  MS Defender:     ✗ Disabled"
-    fi
-
-    # Check Automox
-    if docker secret ls --format "{{.Name}}" 2>/dev/null | grep -q "^automox_api_key$"; then
-        if docker secret inspect automox_api_key --format '{{.Spec.Data}}' 2>/dev/null | base64 -d | grep -qv "not_configured"; then
-            echo "  Automox:         ✓ Enabled"
-        else
-            echo "  Automox:         ✗ Disabled"
-        fi
-    else
-        echo "  Automox:         ✗ Disabled"
-    fi
-
-    # Check Wiz
-    if docker secret ls --format "{{.Name}}" 2>/dev/null | grep -q "^wiz_client_id$"; then
-        if docker secret inspect wiz_client_id --format '{{.Spec.Data}}' 2>/dev/null | base64 -d | grep -qv "not_configured"; then
-            echo "  Wiz:             ✓ Enabled"
-        else
-            echo "  Wiz:             ✗ Disabled"
-        fi
-    else
-        echo "  Wiz:             ✗ Disabled"
-    fi
-    
+    echo "  KEV + EPSS:       $([ "$external_data_enabled" = "true" ] && echo "✓ Enabled" || echo "✗ Disabled")"
+    echo "  VulnCheck:        $([ "$vulncheck_enabled"      = "true" ] && echo "✓ Enabled" || echo "✗ Disabled")"
+    echo "  Tenable.io:       $([ "$tenable_enabled"        = "true" ] && echo "✓ Enabled" || echo "✗ Disabled")"
+    echo "  Falcon Spotlight: $([ "$falcon_enabled"         = "true" ] && echo "✓ Enabled" || echo "✗ Disabled")"
+    echo "  Qualys VMDR:      $([ "$qualys_enabled"         = "true" ] && echo "✓ Enabled" || echo "✗ Disabled")"
+    echo "  ServiceNow:       $([ "$servicenow_enabled"     = "true" ] && echo "✓ Enabled" || echo "✗ Disabled")"
+    echo "  MS Defender:      $([ "$mde_enabled"            = "true" ] && echo "✓ Enabled" || echo "✗ Disabled")"
+    echo "  Automox:          $([ "$automox_enabled"        = "true" ] && echo "✓ Enabled" || echo "✗ Disabled")"
+    echo "  Wiz:              $([ "$wiz_enabled"            = "true" ] && echo "✓ Enabled" || echo "✗ Disabled")"
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     
