@@ -105,6 +105,18 @@ services:
       - wiz_client_secret
       - wiz_api_endpoint_url
       
+      # SentinelOne Integration
+      - sentinelone_api_url
+      - sentinelone_api_token
+      
+      # TrendMicro Vision One Integration
+      - trendmicro_api_key
+      - trendmicro_api_url
+      
+      # Rapid7 InsightVM Integration
+      - rapid7_api_key
+      - rapid7_region
+      
       # Optional Tools
       - optional_tools
       - vulncheck_api_key
@@ -298,6 +310,24 @@ secrets:
   wiz_client_secret:
     external: true
   wiz_api_endpoint_url:
+    external: true
+  
+  # SentinelOne credentials
+  sentinelone_api_url:
+    external: true
+  sentinelone_api_token:
+    external: true
+  
+  # TrendMicro Vision One credentials
+  trendmicro_api_key:
+    external: true
+  trendmicro_api_url:
+    external: true
+  
+  # Rapid7 InsightVM credentials
+  rapid7_api_key:
+    external: true
+  rapid7_region:
     external: true
   
   # Optional integrations

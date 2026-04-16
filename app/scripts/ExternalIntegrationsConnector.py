@@ -1,6 +1,7 @@
 # Author: Raúl Herrera Pailemilla
 # Supports: Tenable, CrowdStrike Falcon Spotlight, Qualys, ServiceNow,
-#           Microsoft Defender for Endpoint (MDE), Automox, Wiz
+#           Microsoft Defender for Endpoint (MDE), Automox, Wiz,
+#           SentinelOne, TrendMicro Vision One, Rapid7 InsightVM
 
 import psycopg2
 from datetime import datetime
@@ -2237,6 +2238,959 @@ def check_create_table_wiz_cloud_resource_type_probe(host, port, user, password,
 
 
 # ============================================================================
+# SENTINELONE INTEGRATION TABLES
+# ============================================================================
+
+def check_create_table_sentinelone_etl_runs(host, port, user, password, database):
+    """
+    Creates table for tracking SentinelOne ETL runs.
+    Must be created first due to FK dependency from sentinelone_vuln_finding.
+    """
+    db_params = {
+        'host': host,
+        'port': port,
+        'user': user,
+        'password': password,
+        'database': database
+    }
+
+    conn = psycopg2.connect(**db_params)
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    create_table_query = """
+    CREATE TABLE IF NOT EXISTS public.sentinelone_etl_runs (
+        run_id        BIGSERIAL   PRIMARY KEY,
+        started_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+        finished_at   TIMESTAMPTZ,
+        status        TEXT        NOT NULL DEFAULT 'running'
+                                  CHECK (status IN ('running','success','partial','error')),
+        api_base_url  TEXT,
+        tool_version  TEXT,
+        rows_agents   INTEGER     NOT NULL DEFAULT 0,
+        rows_apps     INTEGER     NOT NULL DEFAULT 0,
+        rows_vulns    INTEGER     NOT NULL DEFAULT 0,
+        rows_cves     INTEGER     NOT NULL DEFAULT 0,
+        error_message TEXT,
+        error_detail  TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_s1_etl_runs_started
+        ON public.sentinelone_etl_runs(started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_s1_etl_runs_status
+        ON public.sentinelone_etl_runs(status);
+    """
+
+    cur.execute(create_table_query)
+    print("The table 'sentinelone_etl_runs' was created or already exists")
+
+    cur.close()
+    conn.close()
+
+
+def check_create_table_sentinelone_agent(host, port, user, password, database):
+    """
+    Creates table for SentinelOne agent inventory.
+    Must be created before sentinelone_installed_app and sentinelone_vuln_finding.
+    """
+    db_params = {
+        'host': host,
+        'port': port,
+        'user': user,
+        'password': password,
+        'database': database
+    }
+
+    conn = psycopg2.connect(**db_params)
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    create_table_query = """
+    CREATE TABLE IF NOT EXISTS public.sentinelone_agent (
+        agent_id                  TEXT        PRIMARY KEY,
+        uuid                      TEXT        UNIQUE,
+        computer_name             TEXT        NOT NULL,
+        computer_name_norm        TEXT GENERATED ALWAYS AS (lower(trim(computer_name))) STORED,
+        account_id                TEXT,
+        account_name              TEXT,
+        site_id                   TEXT,
+        site_name                 TEXT,
+        group_id                  TEXT,
+        group_name                TEXT,
+        os_name                   TEXT,
+        os_type                   TEXT,
+        os_revision               TEXT,
+        os_arch                   TEXT,
+        machine_type              TEXT,
+        model_name                TEXT,
+        core_count                INTEGER,
+        cpu_count                 INTEGER,
+        total_memory_mb           INTEGER,
+        last_ip_to_mgmt           TEXT,
+        external_ip               TEXT,
+        domain                    TEXT,
+        agent_version             TEXT,
+        installer_type            TEXT,
+        mitigation_mode           TEXT,
+        network_status            TEXT,
+        is_active                 BOOLEAN,
+        is_decommissioned         BOOLEAN,
+        is_up_to_date             BOOLEAN,
+        apps_vulnerability_status TEXT,
+        active_threats            INTEGER,
+        infected                  BOOLEAN,
+        cloud_provider            TEXT,
+        cloud_account             TEXT,
+        cloud_instance_id         TEXT,
+        cloud_instance_size       TEXT,
+        cloud_location            TEXT,
+        cloud_image               TEXT,
+        registered_at             TIMESTAMPTZ,
+        last_active_date          TIMESTAMPTZ,
+        last_successful_scan_date TIMESTAMPTZ,
+        created_at                TIMESTAMPTZ,
+        updated_at                TIMESTAMPTZ,
+        raw                       JSONB,
+        ingested_at               TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_s1_agent_computer_name_norm
+        ON public.sentinelone_agent(computer_name_norm);
+    CREATE INDEX IF NOT EXISTS idx_s1_agent_site
+        ON public.sentinelone_agent(site_id);
+    CREATE INDEX IF NOT EXISTS idx_s1_agent_os
+        ON public.sentinelone_agent(os_type, os_name);
+    CREATE INDEX IF NOT EXISTS idx_s1_agent_active
+        ON public.sentinelone_agent(is_active, is_decommissioned);
+    CREATE INDEX IF NOT EXISTS idx_s1_agent_last_active
+        ON public.sentinelone_agent(last_active_date DESC);
+    CREATE INDEX IF NOT EXISTS idx_s1_agent_cloud
+        ON public.sentinelone_agent(cloud_provider, cloud_account);
+    CREATE INDEX IF NOT EXISTS idx_s1_agent_raw_gin
+        ON public.sentinelone_agent USING GIN (raw);
+    """
+
+    cur.execute(create_table_query)
+    print("The table 'sentinelone_agent' was created or already exists")
+
+    cur.close()
+    conn.close()
+
+
+def check_create_table_sentinelone_installed_app(host, port, user, password, database):
+    """
+    Creates table for SentinelOne installed applications per agent.
+    Depends on sentinelone_agent — create that first.
+    """
+    db_params = {
+        'host': host,
+        'port': port,
+        'user': user,
+        'password': password,
+        'database': database
+    }
+
+    conn = psycopg2.connect(**db_params)
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    create_table_query = """
+    CREATE TABLE IF NOT EXISTS public.sentinelone_installed_app (
+        app_id       TEXT        PRIMARY KEY,
+        agent_id     TEXT        NOT NULL
+                                   REFERENCES public.sentinelone_agent(agent_id)
+                                   ON DELETE CASCADE,
+        name         TEXT        NOT NULL,
+        publisher    TEXT,
+        version      TEXT,
+        size         BIGINT,
+        installed_at TIMESTAMPTZ,
+        risk_level   TEXT,
+        ingested_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_s1_app_agent
+        ON public.sentinelone_installed_app(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_s1_app_name_version
+        ON public.sentinelone_installed_app(name, version);
+    CREATE INDEX IF NOT EXISTS idx_s1_app_risk
+        ON public.sentinelone_installed_app(risk_level)
+        WHERE risk_level <> 'none';
+    """
+
+    cur.execute(create_table_query)
+    print("The table 'sentinelone_installed_app' was created or already exists")
+
+    cur.close()
+    conn.close()
+
+
+def check_create_table_sentinelone_cve(host, port, user, password, database):
+    """
+    Creates table for SentinelOne CVE knowledge base.
+    Must be created before sentinelone_vuln_finding due to FK dependency.
+    """
+    db_params = {
+        'host': host,
+        'port': port,
+        'user': user,
+        'password': password,
+        'database': database
+    }
+
+    conn = psycopg2.connect(**db_params)
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    create_table_query = """
+    CREATE TABLE IF NOT EXISTS public.sentinelone_cve (
+        cve_id                TEXT          PRIMARY KEY,
+        published_date        DATE,
+        s1_score              NUMERIC(4,1),
+        nvd_base_score        NUMERIC(4,1),
+        risk_score            NUMERIC(4,1),
+        epss_score            NUMERIC(8,5),
+        exploited_in_the_wild BOOLEAN,
+        exploit_maturity      TEXT,
+        remediation_level     TEXT,
+        report_confidence     TEXT,
+        last_seen_at          TIMESTAMPTZ   NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_s1_cve_nvd_score
+        ON public.sentinelone_cve(nvd_base_score DESC);
+    CREATE INDEX IF NOT EXISTS idx_s1_cve_epss
+        ON public.sentinelone_cve(epss_score DESC);
+    CREATE INDEX IF NOT EXISTS idx_s1_cve_exploited
+        ON public.sentinelone_cve(exploited_in_the_wild);
+    """
+
+    cur.execute(create_table_query)
+    print("The table 'sentinelone_cve' was created or already exists")
+
+    cur.close()
+    conn.close()
+
+
+def check_create_table_sentinelone_vuln_finding(host, port, user, password, database):
+    """
+    Creates table for SentinelOne vulnerability findings (xSPM).
+    Depends on sentinelone_etl_runs, sentinelone_agent and sentinelone_cve — create those first.
+    """
+    db_params = {
+        'host': host,
+        'port': port,
+        'user': user,
+        'password': password,
+        'database': database
+    }
+
+    conn = psycopg2.connect(**db_params)
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    create_table_query = """
+    CREATE TABLE IF NOT EXISTS public.sentinelone_vuln_finding (
+        finding_id           TEXT        PRIMARY KEY,
+        run_id               BIGINT
+                               REFERENCES public.sentinelone_etl_runs(run_id)
+                               ON DELETE SET NULL,
+        cve_id               TEXT
+                               REFERENCES public.sentinelone_cve(cve_id)
+                               ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
+        agent_id             TEXT
+                               REFERENCES public.sentinelone_agent(agent_id)
+                               ON DELETE SET NULL,
+        xspm_asset_id        TEXT,
+        asset_name           TEXT        NOT NULL,
+        asset_name_norm      TEXT GENERATED ALWAYS AS (lower(trim(asset_name))) STORED,
+        asset_type           TEXT,
+        asset_category       TEXT,
+        asset_subcategory    TEXT,
+        asset_os_type        TEXT,
+        asset_privileged     BOOLEAN,
+        cloud_provider       TEXT,
+        cloud_region         TEXT,
+        cloud_account_id     TEXT,
+        name                 TEXT,
+        severity             TEXT,
+        status               TEXT,
+        detected_at          TIMESTAMPTZ,
+        software_name        TEXT,
+        software_version     TEXT,
+        software_type        TEXT,
+        software_vendor      TEXT,
+        software_fix_version TEXT,
+        has_fix              BOOLEAN GENERATED ALWAYS AS
+                               (software_fix_version IS NOT NULL) STORED,
+        account_id           TEXT,
+        account_name         TEXT,
+        site_id              TEXT,
+        site_name            TEXT,
+        ingested_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_s1_vf_run
+        ON public.sentinelone_vuln_finding(run_id);
+    CREATE INDEX IF NOT EXISTS idx_s1_vf_cve
+        ON public.sentinelone_vuln_finding(cve_id);
+    CREATE INDEX IF NOT EXISTS idx_s1_vf_agent
+        ON public.sentinelone_vuln_finding(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_s1_vf_asset_name_norm
+        ON public.sentinelone_vuln_finding(asset_name_norm);
+    CREATE INDEX IF NOT EXISTS idx_s1_vf_asset_cve
+        ON public.sentinelone_vuln_finding(asset_name_norm, cve_id);
+    CREATE INDEX IF NOT EXISTS idx_s1_vf_severity
+        ON public.sentinelone_vuln_finding(severity);
+    CREATE INDEX IF NOT EXISTS idx_s1_vf_status
+        ON public.sentinelone_vuln_finding(status);
+    CREATE INDEX IF NOT EXISTS idx_s1_vf_detected
+        ON public.sentinelone_vuln_finding(detected_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_s1_vf_sw_name
+        ON public.sentinelone_vuln_finding(software_name, software_version);
+    CREATE INDEX IF NOT EXISTS idx_s1_vf_has_fix
+        ON public.sentinelone_vuln_finding(has_fix);
+    """
+
+    cur.execute(create_table_query)
+    print("The table 'sentinelone_vuln_finding' was created or already exists")
+
+    cur.close()
+    conn.close()
+
+
+# ============================================================================
+# TRENDMICRO VISION ONE INTEGRATION TABLES
+# ============================================================================
+
+def check_create_table_trendmicro_etl_runs(host, port, user, password, database):
+    """
+    Creates table for tracking TrendMicro Vision One ETL runs.
+    """
+    db_params = {
+        'host': host,
+        'port': port,
+        'user': user,
+        'password': password,
+        'database': database
+    }
+
+    conn = psycopg2.connect(**db_params)
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    create_table_query = """
+    CREATE TABLE IF NOT EXISTS public.trendmicro_etl_runs (
+        run_id          BIGSERIAL   PRIMARY KEY,
+        started_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+        finished_at     TIMESTAMPTZ,
+        status          TEXT        NOT NULL DEFAULT 'running'
+                                    CHECK (status IN ('running','success','partial','error')),
+        api_base_url    TEXT,
+        rows_endpoints  INTEGER     NOT NULL DEFAULT 0,
+        rows_alerts     INTEGER     NOT NULL DEFAULT 0,
+        rows_oat        INTEGER     NOT NULL DEFAULT 0,
+        error_message   TEXT,
+        error_detail    TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_tm_etl_runs_started
+        ON public.trendmicro_etl_runs(started_at DESC);
+    """
+
+    cur.execute(create_table_query)
+    print("The table 'trendmicro_etl_runs' was created or already exists")
+
+    cur.close()
+    conn.close()
+
+
+def check_create_table_trendmicro_endpoint(host, port, user, password, database):
+    """
+    Creates table for TrendMicro Vision One endpoint inventory.
+    Must be created before trendmicro_endpoint_iface due to FK dependency.
+    """
+    db_params = {
+        'host': host,
+        'port': port,
+        'user': user,
+        'password': password,
+        'database': database
+    }
+
+    conn = psycopg2.connect(**db_params)
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    create_table_query = """
+    CREATE TABLE IF NOT EXISTS public.trendmicro_endpoint (
+        agent_guid                      TEXT        PRIMARY KEY,
+        endpoint_name                   TEXT        NOT NULL,
+        endpoint_name_norm              TEXT GENERATED ALWAYS AS (
+                                          lower(split_part(trim(endpoint_name), '.', 1))
+                                        ) STORED,
+        description                     TEXT,
+        type                            TEXT,
+        os_name                         TEXT,
+        os_version                      TEXT,
+        os_platform                     TEXT,
+        os_architecture                 TEXT,
+        os_kernel_version               TEXT,
+        cpu_architecture                TEXT,
+        last_used_ip                    TEXT,
+        isolation_status                TEXT,
+        service_gateway_or_proxy        TEXT,
+        security_policy                 TEXT,
+        security_policy_overridden      TEXT,
+        credit_allocated_licenses       TEXT[],
+        epp_status                      TEXT,
+        epp_version                     TEXT,
+        epp_component_version           TEXT,
+        epp_component_update_status     TEXT,
+        epp_policy_name                 TEXT,
+        epp_endpoint_group              TEXT,
+        epp_protection_manager          TEXT,
+        epp_last_connected_at           TIMESTAMPTZ,
+        epp_last_scanned_at             TIMESTAMPTZ,
+        epp_product_names               TEXT[],
+        edr_status                      TEXT,
+        edr_connectivity                TEXT,
+        edr_version                     TEXT,
+        edr_last_connected_at           TIMESTAMPTZ,
+        edr_advanced_risk_telemetry     TEXT,
+        edr_component_update_status     TEXT,
+        edr_endpoint_group              TEXT,
+        raw_inventory                   JSONB,
+        raw_detail                      JSONB,
+        ingested_at                     TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_tm_endpoint_name_norm
+        ON public.trendmicro_endpoint(endpoint_name_norm);
+    CREATE INDEX IF NOT EXISTS idx_tm_endpoint_os
+        ON public.trendmicro_endpoint(os_platform, os_name);
+    CREATE INDEX IF NOT EXISTS idx_tm_endpoint_type
+        ON public.trendmicro_endpoint(type);
+    CREATE INDEX IF NOT EXISTS idx_tm_endpoint_epp_status
+        ON public.trendmicro_endpoint(epp_status);
+    CREATE INDEX IF NOT EXISTS idx_tm_endpoint_edr_status
+        ON public.trendmicro_endpoint(edr_status);
+    CREATE INDEX IF NOT EXISTS idx_tm_endpoint_raw_inv_gin
+        ON public.trendmicro_endpoint USING GIN (raw_inventory);
+    """
+
+    cur.execute(create_table_query)
+    print("The table 'trendmicro_endpoint' was created or already exists")
+
+    cur.close()
+    conn.close()
+
+
+def check_create_table_trendmicro_endpoint_iface(host, port, user, password, database):
+    """
+    Creates table for TrendMicro endpoint network interfaces.
+    Depends on trendmicro_endpoint — create that first.
+    """
+    db_params = {
+        'host': host,
+        'port': port,
+        'user': user,
+        'password': password,
+        'database': database
+    }
+
+    conn = psycopg2.connect(**db_params)
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    create_table_query = """
+    CREATE TABLE IF NOT EXISTS public.trendmicro_endpoint_iface (
+        iface_id        BIGSERIAL   PRIMARY KEY,
+        agent_guid      TEXT        NOT NULL
+                                      REFERENCES public.trendmicro_endpoint(agent_guid)
+                                      ON DELETE CASCADE,
+        mac_address     TEXT,
+        ip_addresses    TEXT[]      NOT NULL DEFAULT '{}',
+        ingested_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_tm_iface_agent
+        ON public.trendmicro_endpoint_iface(agent_guid);
+    CREATE INDEX IF NOT EXISTS idx_tm_iface_mac
+        ON public.trendmicro_endpoint_iface(mac_address);
+    CREATE INDEX IF NOT EXISTS idx_tm_iface_ips_gin
+        ON public.trendmicro_endpoint_iface USING GIN (ip_addresses);
+    """
+
+    cur.execute(create_table_query)
+    print("The table 'trendmicro_endpoint_iface' was created or already exists")
+
+    cur.close()
+    conn.close()
+
+
+def check_create_table_trendmicro_alert(host, port, user, password, database):
+    """
+    Creates table for TrendMicro Workbench alerts.
+    Must be created before trendmicro_alert_host due to FK dependency.
+    """
+    db_params = {
+        'host': host,
+        'port': port,
+        'user': user,
+        'password': password,
+        'database': database
+    }
+
+    conn = psycopg2.connect(**db_params)
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    create_table_query = """
+    CREATE TABLE IF NOT EXISTS public.trendmicro_alert (
+        alert_id                TEXT        PRIMARY KEY,
+        incident_id             TEXT,
+        schema_version          TEXT,
+        status                  TEXT,
+        investigation_status    TEXT,
+        investigation_result    TEXT,
+        alert_provider          TEXT,
+        model_id                TEXT,
+        model                   TEXT,
+        model_type              TEXT,
+        score                   INTEGER,
+        severity                TEXT,
+        description             TEXT,
+        workbench_link          TEXT,
+        created_at              TIMESTAMPTZ,
+        updated_at              TIMESTAMPTZ,
+        impact_desktop_count    INTEGER,
+        impact_server_count     INTEGER,
+        impact_account_count    INTEGER,
+        impact_container_count  INTEGER,
+        mitre_technique_ids     TEXT[],
+        matched_rule_names      TEXT[],
+        raw                     JSONB,
+        ingested_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_tm_alert_severity
+        ON public.trendmicro_alert(severity);
+    CREATE INDEX IF NOT EXISTS idx_tm_alert_status
+        ON public.trendmicro_alert(status, investigation_status);
+    CREATE INDEX IF NOT EXISTS idx_tm_alert_created
+        ON public.trendmicro_alert(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_tm_alert_mitre_gin
+        ON public.trendmicro_alert USING GIN (mitre_technique_ids);
+    """
+
+    cur.execute(create_table_query)
+    print("The table 'trendmicro_alert' was created or already exists")
+
+    cur.close()
+    conn.close()
+
+
+def check_create_table_trendmicro_alert_host(host, port, user, password, database):
+    """
+    Creates table for TrendMicro alert host entities.
+    Depends on trendmicro_alert — create that first.
+    """
+    db_params = {
+        'host': host,
+        'port': port,
+        'user': user,
+        'password': password,
+        'database': database
+    }
+
+    conn = psycopg2.connect(**db_params)
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    create_table_query = """
+    CREATE TABLE IF NOT EXISTS public.trendmicro_alert_host (
+        id                  BIGSERIAL   PRIMARY KEY,
+        alert_id            TEXT        NOT NULL
+                                          REFERENCES public.trendmicro_alert(alert_id)
+                                          ON DELETE CASCADE,
+        agent_guid          TEXT,
+        endpoint_name       TEXT,
+        endpoint_name_norm  TEXT GENERATED ALWAYS AS (
+                              lower(split_part(trim(coalesce(endpoint_name,'')), '.', 1))
+                            ) STORED,
+        entity_type         TEXT,
+        entity_value        JSONB,
+        ips                 TEXT[],
+        ingested_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_tm_ah_alert
+        ON public.trendmicro_alert_host(alert_id);
+    CREATE INDEX IF NOT EXISTS idx_tm_ah_agent
+        ON public.trendmicro_alert_host(agent_guid);
+    CREATE INDEX IF NOT EXISTS idx_tm_ah_name_norm
+        ON public.trendmicro_alert_host(endpoint_name_norm);
+    CREATE INDEX IF NOT EXISTS idx_tm_ah_ips_gin
+        ON public.trendmicro_alert_host USING GIN (ips);
+    """
+
+    cur.execute(create_table_query)
+    print("The table 'trendmicro_alert_host' was created or already exists")
+
+    cur.close()
+    conn.close()
+
+
+def check_create_table_trendmicro_oat_detection(host, port, user, password, database):
+    """
+    Creates table for TrendMicro OAT (Observed Attack Techniques) detections.
+    """
+    db_params = {
+        'host': host,
+        'port': port,
+        'user': user,
+        'password': password,
+        'database': database
+    }
+
+    conn = psycopg2.connect(**db_params)
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    create_table_query = """
+    CREATE TABLE IF NOT EXISTS public.trendmicro_oat_detection (
+        uuid                TEXT        PRIMARY KEY,
+        agent_guid          TEXT,
+        endpoint_name       TEXT,
+        endpoint_name_norm  TEXT GENERATED ALWAYS AS (
+                              lower(split_part(trim(coalesce(endpoint_name,'')), '.', 1))
+                            ) STORED,
+        endpoint_ip         TEXT[],
+        source              TEXT,
+        entity_type         TEXT,
+        detected_at         TIMESTAMPTZ,
+        ingested_at_api     TIMESTAMPTZ,
+        filter_ids          TEXT[],
+        filter_names        TEXT[],
+        filter_risk_level   TEXT,
+        mitre_tactic_ids    TEXT[],
+        mitre_technique_ids TEXT[],
+        process_name        TEXT,
+        process_cmd         TEXT,
+        process_user        TEXT,
+        process_file_sha256 TEXT,
+        object_name         TEXT,
+        object_cmd          TEXT,
+        event_name          TEXT,
+        logon_user          TEXT[],
+        raw_detail          JSONB,
+        ingested_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_tm_oat_agent
+        ON public.trendmicro_oat_detection(agent_guid);
+    CREATE INDEX IF NOT EXISTS idx_tm_oat_name_norm
+        ON public.trendmicro_oat_detection(endpoint_name_norm);
+    CREATE INDEX IF NOT EXISTS idx_tm_oat_detected
+        ON public.trendmicro_oat_detection(detected_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_tm_oat_risk
+        ON public.trendmicro_oat_detection(filter_risk_level);
+    CREATE INDEX IF NOT EXISTS idx_tm_oat_mitre_gin
+        ON public.trendmicro_oat_detection USING GIN (mitre_technique_ids);
+    CREATE INDEX IF NOT EXISTS idx_tm_oat_sha256
+        ON public.trendmicro_oat_detection(process_file_sha256)
+        WHERE process_file_sha256 IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_tm_oat_raw_gin
+        ON public.trendmicro_oat_detection USING GIN (raw_detail);
+    """
+
+    cur.execute(create_table_query)
+    print("The table 'trendmicro_oat_detection' was created or already exists")
+
+    cur.close()
+    conn.close()
+
+
+# ============================================================================
+# RAPID7 INSIGHTVM INTEGRATION TABLES
+# ============================================================================
+
+def check_create_table_rapid7_etl_runs(host, port, user, password, database):
+    """
+    Creates table for tracking Rapid7 InsightVM ETL runs.
+    Must be created first due to FK dependencies from rapid7_asset,
+    rapid7_vuln_finding and rapid7_remediation.
+    """
+    db_params = {
+        'host': host,
+        'port': port,
+        'user': user,
+        'password': password,
+        'database': database
+    }
+
+    conn = psycopg2.connect(**db_params)
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    create_table_query = """
+    CREATE TABLE IF NOT EXISTS public.rapid7_etl_runs (
+        run_id            BIGSERIAL   PRIMARY KEY,
+        started_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+        finished_at       TIMESTAMPTZ,
+        status            TEXT        NOT NULL DEFAULT 'running'
+                                      CHECK (status IN ('running','success','partial','error')),
+        api_base_url      TEXT,
+        region            TEXT,
+        rows_assets       INTEGER     NOT NULL DEFAULT 0,
+        rows_vulns        INTEGER     NOT NULL DEFAULT 0,
+        rows_remediations INTEGER     NOT NULL DEFAULT 0,
+        error_message     TEXT,
+        error_detail      TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_r7_etl_runs_started
+        ON public.rapid7_etl_runs(started_at DESC);
+    """
+
+    cur.execute(create_table_query)
+    print("The table 'rapid7_etl_runs' was created or already exists")
+
+    cur.close()
+    conn.close()
+
+
+def check_create_table_rapid7_asset(host, port, user, password, database):
+    """
+    Creates table for Rapid7 InsightVM asset inventory.
+    Depends on rapid7_etl_runs — create that first.
+    Must be created before rapid7_vuln_finding and rapid7_remediation.
+    """
+    db_params = {
+        'host': host,
+        'port': port,
+        'user': user,
+        'password': password,
+        'database': database
+    }
+
+    conn = psycopg2.connect(**db_params)
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    create_table_query = """
+    CREATE TABLE IF NOT EXISTS public.rapid7_asset (
+        asset_id              TEXT        PRIMARY KEY,
+        last_run_id           BIGINT
+                                REFERENCES public.rapid7_etl_runs(run_id)
+                                ON DELETE SET NULL,
+        org_id                TEXT,
+        agent_id              TEXT,
+        aws_instance_id       TEXT,
+        azure_resource_id     TEXT,
+        gcp_object_id         TEXT,
+        mac                   TEXT,
+        ip                    TEXT,
+        host_name             TEXT,
+        host_name_norm        TEXT GENERATED ALWAYS AS (
+                                lower(split_part(trim(coalesce(host_name,'')), '.', 1))
+                              ) STORED,
+        os_architecture       TEXT,
+        os_family             TEXT,
+        os_product            TEXT,
+        os_vendor             TEXT,
+        os_version            TEXT,
+        os_type               TEXT,
+        os_description        TEXT,
+        risk_score            NUMERIC(12,4),
+        sites                 TEXT[]   NOT NULL DEFAULT '{}',
+        asset_groups          TEXT[]   NOT NULL DEFAULT '{}',
+        tags                  TEXT[]   NOT NULL DEFAULT '{}',
+        vuln_finding_count    INTEGER  NOT NULL DEFAULT 0,
+        unique_vuln_id_count  INTEGER  NOT NULL DEFAULT 0,
+        unique_cve_count      INTEGER  NOT NULL DEFAULT 0,
+        cves                  TEXT[]   NOT NULL DEFAULT '{}',
+        ingested_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_r7_asset_host_name_norm
+        ON public.rapid7_asset(host_name_norm);
+    CREATE INDEX IF NOT EXISTS idx_r7_asset_ip
+        ON public.rapid7_asset(ip);
+    CREATE INDEX IF NOT EXISTS idx_r7_asset_os_family
+        ON public.rapid7_asset(os_family);
+    CREATE INDEX IF NOT EXISTS idx_r7_asset_risk_score
+        ON public.rapid7_asset(risk_score DESC);
+    CREATE INDEX IF NOT EXISTS idx_r7_asset_cves_gin
+        ON public.rapid7_asset USING GIN (cves);
+    CREATE INDEX IF NOT EXISTS idx_r7_asset_sites_gin
+        ON public.rapid7_asset USING GIN (sites);
+    """
+
+    cur.execute(create_table_query)
+    print("The table 'rapid7_asset' was created or already exists")
+
+    cur.close()
+    conn.close()
+
+
+def check_create_table_rapid7_vuln_finding(host, port, user, password, database):
+    """
+    Creates table for Rapid7 InsightVM vulnerability findings.
+    Depends on rapid7_asset and rapid7_etl_runs — create those first.
+    """
+    db_params = {
+        'host': host,
+        'port': port,
+        'user': user,
+        'password': password,
+        'database': database
+    }
+
+    conn = psycopg2.connect(**db_params)
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    create_table_query = """
+    CREATE TABLE IF NOT EXISTS public.rapid7_vuln_finding (
+        finding_id            BIGSERIAL   PRIMARY KEY,
+        asset_id              TEXT        NOT NULL
+                                REFERENCES public.rapid7_asset(asset_id)
+                                ON DELETE CASCADE,
+        run_id                BIGINT
+                                REFERENCES public.rapid7_etl_runs(run_id)
+                                ON DELETE SET NULL,
+        vuln_id               TEXT        NOT NULL,
+        port                  INTEGER,
+        protocol              TEXT,
+        nic                   TEXT,
+        severity              TEXT,
+        severity_rank         INTEGER,
+        severity_score        INTEGER,
+        risk_score            NUMERIC(12,4),
+        risk_score_v2         NUMERIC(12,4),
+        cvss_score            NUMERIC(5,2),
+        cvss_v3_score         NUMERIC(5,2),
+        cvss_v3_severity      TEXT,
+        cvss_v3_severity_rank INTEGER,
+        cvss_v3_attack_vector         TEXT,
+        cvss_v3_attack_complexity     TEXT,
+        cvss_v3_privileges_required   TEXT,
+        cvss_v3_user_interaction      TEXT,
+        cvss_v3_scope                 TEXT,
+        cvss_v3_confidentiality       TEXT,
+        cvss_v3_integrity             TEXT,
+        cvss_v3_availability          TEXT,
+        epss_score            NUMERIC(8,6),
+        epss_percentile       NUMERIC(8,6),
+        has_exploits          BOOLEAN,
+        threat_feed_exists    BOOLEAN,
+        pci_compliant         BOOLEAN,
+        pci_severity          INTEGER,
+        skill_level           TEXT,
+        skill_level_rank      INTEGER,
+        title                 TEXT,
+        description           TEXT,
+        first_found_at        TIMESTAMPTZ,
+        date_published        TIMESTAMPTZ,
+        date_added            TIMESTAMPTZ,
+        date_modified         TIMESTAMPTZ,
+        cves                  TEXT[]   NOT NULL DEFAULT '{}',
+        tags                  TEXT[]   NOT NULL DEFAULT '{}',
+        ingested_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS uidx_r7_vf_dedup
+        ON public.rapid7_vuln_finding
+        (asset_id, run_id, vuln_id,
+         COALESCE(port,-1), COALESCE(protocol,''), COALESCE(nic,''));
+
+    CREATE INDEX IF NOT EXISTS idx_r7_vf_asset
+        ON public.rapid7_vuln_finding(asset_id);
+    CREATE INDEX IF NOT EXISTS idx_r7_vf_run
+        ON public.rapid7_vuln_finding(run_id);
+    CREATE INDEX IF NOT EXISTS idx_r7_vf_vuln_id
+        ON public.rapid7_vuln_finding(vuln_id);
+    CREATE INDEX IF NOT EXISTS idx_r7_vf_severity
+        ON public.rapid7_vuln_finding(severity, severity_rank);
+    CREATE INDEX IF NOT EXISTS idx_r7_vf_cvss_v3
+        ON public.rapid7_vuln_finding(cvss_v3_score DESC NULLS LAST);
+    CREATE INDEX IF NOT EXISTS idx_r7_vf_epss
+        ON public.rapid7_vuln_finding(epss_score DESC NULLS LAST);
+    CREATE INDEX IF NOT EXISTS idx_r7_vf_has_exploits
+        ON public.rapid7_vuln_finding(has_exploits)
+        WHERE has_exploits = true;
+    CREATE INDEX IF NOT EXISTS idx_r7_vf_cves_gin
+        ON public.rapid7_vuln_finding USING GIN (cves);
+    """
+
+    cur.execute(create_table_query)
+    print("The table 'rapid7_vuln_finding' was created or already exists")
+
+    cur.close()
+    conn.close()
+
+
+def check_create_table_rapid7_remediation(host, port, user, password, database):
+    """
+    Creates table for Rapid7 InsightVM remediation records.
+    Depends on rapid7_asset and rapid7_etl_runs — create those first.
+    """
+    db_params = {
+        'host': host,
+        'port': port,
+        'user': user,
+        'password': password,
+        'database': database
+    }
+
+    conn = psycopg2.connect(**db_params)
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    create_table_query = """
+    CREATE TABLE IF NOT EXISTS public.rapid7_remediation (
+        remediation_id    BIGSERIAL   PRIMARY KEY,
+        asset_id          TEXT        NOT NULL
+                            REFERENCES public.rapid7_asset(asset_id)
+                            ON DELETE CASCADE,
+        run_id            BIGINT
+                            REFERENCES public.rapid7_etl_runs(run_id)
+                            ON DELETE SET NULL,
+        vuln_id           TEXT        NOT NULL,
+        cve_id            TEXT,
+        title             TEXT,
+        description       TEXT,
+        proof             TEXT,
+        first_found_at    TIMESTAMPTZ,
+        last_detected_at  TIMESTAMPTZ,
+        last_removed_at   TIMESTAMPTZ,
+        reintroduced_at   TIMESTAMPTZ,
+        ingested_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS uidx_r7_rem_dedup
+        ON public.rapid7_remediation
+        (asset_id, run_id, vuln_id, COALESCE(cve_id,''));
+
+    CREATE INDEX IF NOT EXISTS idx_r7_rem_asset
+        ON public.rapid7_remediation(asset_id);
+    CREATE INDEX IF NOT EXISTS idx_r7_rem_vuln
+        ON public.rapid7_remediation(vuln_id);
+    CREATE INDEX IF NOT EXISTS idx_r7_rem_cve
+        ON public.rapid7_remediation(cve_id)
+        WHERE cve_id IS NOT NULL;
+    """
+
+    cur.execute(create_table_query)
+    print("The table 'rapid7_remediation' was created or already exists")
+
+    cur.close()
+    conn.close()
+
+
+# ============================================================================
 # MASTER FUNCTION TO CREATE ALL EXTERNAL INTEGRATION TABLES
 # ============================================================================
 
@@ -2247,7 +3201,7 @@ def check_create_all_external_integration_tables(host, port, user, password, dat
     """
     ct = datetime.now()
     print(str(ct) + " Creating all external integration tables...")
-    
+
     # Tenable tables
     print("\n--- Creating Tenable tables ---")
     check_create_table_tenable_assets_current(host, port, user, password, database)
@@ -2257,7 +3211,7 @@ def check_create_all_external_integration_tables(host, port, user, password, dat
     check_create_table_tenable_findings_history(host, port, user, password, database)
     check_create_table_tenable_ingest_runs(host, port, user, password, database)
     check_create_table_tenable_plugin_cve_map(host, port, user, password, database)
-    
+
     # CrowdStrike Falcon Spotlight tables
     print("\n--- Creating CrowdStrike Falcon Spotlight tables ---")
     check_create_table_falcon_spotlight_dim_hosts(host, port, user, password, database)
@@ -2267,7 +3221,7 @@ def check_create_all_external_integration_tables(host, port, user, password, dat
     check_create_table_falcon_spotlight_fact_vulnerability_instances(host, port, user, password, database)
     check_create_table_falcon_spotlight_rel_apps(host, port, user, password, database)
     check_create_table_falcon_spotlight_rel_evaluation_logic(host, port, user, password, database)
-    
+
     # Qualys tables (order matters due to foreign keys)
     print("\n--- Creating Qualys tables ---")
     check_create_table_qualys_asset(host, port, user, password, database)
@@ -2308,6 +3262,30 @@ def check_create_all_external_integration_tables(host, port, user, password, dat
     check_create_table_wiz_cloud_cfg_finding(host, port, user, password, database)
     check_create_table_wiz_cloud_issue(host, port, user, password, database)
     check_create_table_wiz_cloud_resource_type_probe(host, port, user, password, database)
+
+    # SentinelOne tables (order matters due to foreign keys)
+    print("\n--- Creating SentinelOne tables ---")
+    check_create_table_sentinelone_etl_runs(host, port, user, password, database)
+    check_create_table_sentinelone_agent(host, port, user, password, database)
+    check_create_table_sentinelone_installed_app(host, port, user, password, database)
+    check_create_table_sentinelone_cve(host, port, user, password, database)
+    check_create_table_sentinelone_vuln_finding(host, port, user, password, database)
+
+    # TrendMicro Vision One tables (order matters due to foreign keys)
+    print("\n--- Creating TrendMicro Vision One tables ---")
+    check_create_table_trendmicro_etl_runs(host, port, user, password, database)
+    check_create_table_trendmicro_endpoint(host, port, user, password, database)
+    check_create_table_trendmicro_endpoint_iface(host, port, user, password, database)
+    check_create_table_trendmicro_alert(host, port, user, password, database)
+    check_create_table_trendmicro_alert_host(host, port, user, password, database)
+    check_create_table_trendmicro_oat_detection(host, port, user, password, database)
+
+    # Rapid7 InsightVM tables (order matters due to foreign keys)
+    print("\n--- Creating Rapid7 InsightVM tables ---")
+    check_create_table_rapid7_etl_runs(host, port, user, password, database)
+    check_create_table_rapid7_asset(host, port, user, password, database)
+    check_create_table_rapid7_vuln_finding(host, port, user, password, database)
+    check_create_table_rapid7_remediation(host, port, user, password, database)
 
     ct = datetime.now()
     print("\n" + str(ct) + " All external integration tables created successfully!")

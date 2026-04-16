@@ -35,23 +35,23 @@ def initialize_external_integration_tables():
     """Create external integration tables at startup"""
     try:
         logger.info("Initializing external integration tables...")
-        
+
         host = os.environ.get('DATABASE_HOST', 'appdb')
         port = os.environ.get('DATABASE_PORT', '5432')
         database = read_secret('/run/secrets/postgres_db')
         user = read_secret('/run/secrets/postgres_user')
         password = read_secret('/run/secrets/postgres_password')
-        
+
         if not database or not user or not password:
             logger.error("Missing database credentials, skipping table creation")
             return
-        
+
         ext_db.check_create_all_external_integration_tables(
             host, port, user, password, database
         )
-        
+
         logger.info("External integration tables initialized successfully")
-        
+
     except Exception as e:
         logger.error(f"Error initializing external integration tables: {e}")
 
@@ -115,9 +115,21 @@ def full_sync() -> None:
         print("Running job (wizSync2) at " + str(datetime.now()))
         run_bash_script("/usr/src/app/scripts/WizSync2.sh")
 
+        print("Running job (sentinelOneSync) at " + str(datetime.now()))
+        run_bash_script("/usr/src/app/scripts/SentinelOneSync.sh")
+
+        print("Running job (trendmicroSync) at " + str(datetime.now()))
+        run_bash_script("/usr/src/app/scripts/TrendmicroSync.sh")
+
+        rapid7_key_path = "/run/secrets/rapid7_api_key"
+        if os.path.exists(rapid7_key_path):
+            print("Running job (rapid7Sync) at " + str(datetime.now()))
+            run_bash_script("/usr/src/app/scripts/Rapid7Sync.sh")
+        else:
+            logger.info("Skipping Rapid7 sync: missing rapid7_api_key secret")
+
         tenable_access_path = "/run/secrets/tenable_access_key"
         tenable_secret_path = "/run/secrets/tenable_secret_key"
-
         if os.path.exists(tenable_access_path) and os.path.exists(tenable_secret_path):
             print("Running job 5 (tenableSync) at " + str(datetime.now()))
             run_bash_script("/usr/src/app/scripts/tenableSync.sh")
@@ -210,6 +222,31 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"Initial Wiz sync 2 failed: {e}")
 
+    logger.info("Starting initial SentinelOne sync")
+    try:
+        run_bash_script("/usr/src/app/scripts/SentinelOneSync.sh")
+        logger.info("Initial SentinelOne sync completed successfully")
+    except Exception as e:
+        logger.error(f"Initial SentinelOne sync failed: {e}")
+
+    logger.info("Starting initial TrendMicro sync")
+    try:
+        run_bash_script("/usr/src/app/scripts/TrendmicroSync.sh")
+        logger.info("Initial TrendMicro sync completed successfully")
+    except Exception as e:
+        logger.error(f"Initial TrendMicro sync failed: {e}")
+
+    rapid7_key_path = "/run/secrets/rapid7_api_key"
+    if os.path.exists(rapid7_key_path):
+        logger.info("Starting initial Rapid7 sync")
+        try:
+            run_bash_script("/usr/src/app/scripts/Rapid7Sync.sh")
+            logger.info("Initial Rapid7 sync completed successfully")
+        except Exception as e:
+            logger.error(f"Initial Rapid7 sync failed: {e}")
+    else:
+        logger.info("Skipping initial Rapid7 sync: missing rapid7_api_key secret")
+
     external_enabled = os.environ.get("EXTERNAL_DATA_ENABLED", "false").lower() == "true"
     vulncheck_enabled = os.environ.get("VULNCHECK_ENABLED", "false").lower() == "true"
 
@@ -227,7 +264,6 @@ if __name__ == "__main__":
 
     tenable_access_path = "/run/secrets/tenable_access_key"
     tenable_secret_path = "/run/secrets/tenable_secret_key"
-
     if os.path.exists(tenable_access_path) and os.path.exists(tenable_secret_path):
         logger.info("Starting initial Tenable sync")
         try:

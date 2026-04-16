@@ -60,6 +60,9 @@ interactive_simple_setup() {
     local mde_enabled="false"
     local automox_enabled="false"
     local wiz_enabled="false"
+    local sentinelone_enabled="false"
+    local trendmicro_enabled="false"
+    local rapid7_enabled="false"
     
     # ============================================================================
     # CORE VICARIUS CONFIGURATION
@@ -769,6 +772,230 @@ interactive_simple_setup() {
     fi
 
     # ============================================================================
+    # SENTINELONE INTEGRATION
+    # ============================================================================
+    echo ""
+    echo -e "${BOLD}SentinelOne Integration${NC}"
+    echo "SentinelOne provides endpoint detection, response, and vulnerability data."
+    echo "You will need a SentinelOne API token with Read scope on your account."
+    echo ""
+
+    read -p "Enable SentinelOne integration? [y/N]: " enable_sentinelone
+
+    if [[ "$enable_sentinelone" =~ ^[Yy] ]]; then
+        sentinelone_enabled="true"
+
+        # SentinelOne API URL
+        local sentinelone_api_url=""
+        while [[ -z "$sentinelone_api_url" ]]; do
+            read -p "Enter SentinelOne API URL (e.g., https://usea1-021.sentinelone.net): " sentinelone_api_url
+            if [[ -z "$sentinelone_api_url" ]]; then
+                log_error "SentinelOne API URL is required"
+            elif [[ ! "$sentinelone_api_url" =~ ^https?:// ]]; then
+                log_error "Invalid URL format. Must start with http:// or https://"
+                sentinelone_api_url=""
+            fi
+        done
+
+        # SentinelOne API Token
+        local sentinelone_api_token=""
+        while [[ -z "$sentinelone_api_token" ]]; do
+            read -s -p "Enter SentinelOne API Token: " sentinelone_api_token
+            echo ""
+            if [[ -z "$sentinelone_api_token" ]]; then
+                log_error "SentinelOne API Token is required"
+            fi
+        done
+
+        # Create SentinelOne secrets
+        if ! create_or_update_secret "sentinelone_api_url" "$sentinelone_api_url"; then
+            log_error "Failed to create SentinelOne API URL secret"
+            return 1
+        fi
+
+        if ! create_or_update_secret "sentinelone_api_token" "$sentinelone_api_token"; then
+            log_error "Failed to create SentinelOne API Token secret"
+            return 1
+        fi
+
+        log_success "SentinelOne integration configured"
+        echo "  API URL: ${sentinelone_api_url}"
+
+        # Clear from memory
+        unset sentinelone_api_token
+    else
+        # Create placeholder secrets to satisfy Docker Compose requirements
+        create_or_update_secret "sentinelone_api_url" "not_configured"
+        create_or_update_secret "sentinelone_api_token" "not_configured"
+        log_info "SentinelOne integration disabled"
+    fi
+
+    # ============================================================================
+    # TRENDMICRO VISION ONE INTEGRATION
+    # ============================================================================
+    echo ""
+    echo -e "${BOLD}TrendMicro Vision One Integration${NC}"
+    echo "TrendMicro Vision One provides EDR/EPP endpoint telemetry and OAT detections."
+    echo "You will need a Vision One API key with the following permissions:"
+    echo "  Endpoint Security / Endpoint Inventory: Read"
+    echo "  XDR / Workbench Alerts: Read"
+    echo "  XDR / OAT Detections: Read"
+    echo ""
+
+    read -p "Enable TrendMicro Vision One integration? [y/N]: " enable_trendmicro
+
+    if [[ "$enable_trendmicro" =~ ^[Yy] ]]; then
+        trendmicro_enabled="true"
+
+        # TrendMicro API Region Selection
+        echo ""
+        echo "Select TrendMicro Vision One Region:"
+        echo "  1. Global  (https://api.xdr.trendmicro.com)          [default]"
+        echo "  2. US      (https://api.xdr.us.trendmicro.com)"
+        echo "  3. EU      (https://api.xdr.eu.trendmicro.com)"
+        echo "  4. Japan   (https://api.xdr.jp.trendmicro.com)"
+        echo "  5. Australia/NZ (https://api.xdr.au.trendmicro.com)"
+        echo "  6. India   (https://api.xdr.in.trendmicro.com)"
+        echo "  7. Singapore (https://api.xdr.sg.trendmicro.com)"
+        echo "  8. Custom URL"
+
+        local tm_region_choice=""
+        read -p "Select region [1-8] (default: 1): " tm_region_choice
+        tm_region_choice="${tm_region_choice:-1}"
+
+        local trendmicro_api_url=""
+        case $tm_region_choice in
+            1) trendmicro_api_url="https://api.xdr.trendmicro.com" ;;
+            2) trendmicro_api_url="https://api.xdr.us.trendmicro.com" ;;
+            3) trendmicro_api_url="https://api.xdr.eu.trendmicro.com" ;;
+            4) trendmicro_api_url="https://api.xdr.jp.trendmicro.com" ;;
+            5) trendmicro_api_url="https://api.xdr.au.trendmicro.com" ;;
+            6) trendmicro_api_url="https://api.xdr.in.trendmicro.com" ;;
+            7) trendmicro_api_url="https://api.xdr.sg.trendmicro.com" ;;
+            8)
+                read -p "Enter custom TrendMicro API URL: " trendmicro_api_url
+                ;;
+            *)
+                trendmicro_api_url="https://api.xdr.trendmicro.com"
+                log_warning "Invalid selection, using default: Global"
+                ;;
+        esac
+
+        echo "Selected: $trendmicro_api_url"
+
+        # TrendMicro API Key
+        local trendmicro_api_key=""
+        while [[ -z "$trendmicro_api_key" ]]; do
+            read -s -p "Enter TrendMicro Vision One API Key: " trendmicro_api_key
+            echo ""
+            if [[ -z "$trendmicro_api_key" ]]; then
+                log_error "TrendMicro API Key is required"
+            fi
+        done
+
+        # Create TrendMicro secrets
+        if ! create_or_update_secret "trendmicro_api_url" "$trendmicro_api_url"; then
+            log_error "Failed to create TrendMicro API URL secret"
+            return 1
+        fi
+
+        if ! create_or_update_secret "trendmicro_api_key" "$trendmicro_api_key"; then
+            log_error "Failed to create TrendMicro API Key secret"
+            return 1
+        fi
+
+        log_success "TrendMicro Vision One integration configured"
+        echo "  API URL: ${trendmicro_api_url}"
+
+        # Clear from memory
+        unset trendmicro_api_key
+    else
+        # Create placeholder secrets to satisfy Docker Compose requirements
+        create_or_update_secret "trendmicro_api_url" "https://api.xdr.trendmicro.com"
+        create_or_update_secret "trendmicro_api_key" "not_configured"
+        log_info "TrendMicro Vision One integration disabled"
+    fi
+
+    # ============================================================================
+    # RAPID7 INSIGHTVM INTEGRATION
+    # ============================================================================
+    echo ""
+    echo -e "${BOLD}Rapid7 InsightVM Integration${NC}"
+    echo "Rapid7 InsightVM provides vulnerability assessment and risk scoring."
+    echo "You will need a Rapid7 Insight API key and your region."
+    echo ""
+
+    read -p "Enable Rapid7 InsightVM integration? [y/N]: " enable_rapid7
+
+    if [[ "$enable_rapid7" =~ ^[Yy] ]]; then
+        rapid7_enabled="true"
+
+        # Rapid7 Region Selection
+        echo ""
+        echo "Select Rapid7 Insight Platform Region:"
+        echo "  1. US  (us)  — https://us.api.insight.rapid7.com   [default]"
+        echo "  2. US2 (us2) — https://us2.api.insight.rapid7.com"
+        echo "  3. US3 (us3) — https://us3.api.insight.rapid7.com"
+        echo "  4. EU  (eu)  — https://eu.api.insight.rapid7.com"
+        echo "  5. CA  (ca)  — https://ca.api.insight.rapid7.com"
+        echo "  6. AU  (au)  — https://au.api.insight.rapid7.com"
+        echo "  7. AP  (ap)  — https://ap.api.insight.rapid7.com"
+
+        local r7_region_choice=""
+        read -p "Select region [1-7] (default: 3): " r7_region_choice
+        r7_region_choice="${r7_region_choice:-3}"
+
+        local rapid7_region=""
+        case $r7_region_choice in
+            1) rapid7_region="us" ;;
+            2) rapid7_region="us2" ;;
+            3) rapid7_region="us3" ;;
+            4) rapid7_region="eu" ;;
+            5) rapid7_region="ca" ;;
+            6) rapid7_region="au" ;;
+            7) rapid7_region="ap" ;;
+            *)
+                rapid7_region="us3"
+                log_warning "Invalid selection, using default: us3"
+                ;;
+        esac
+
+        echo "Selected region: $rapid7_region  (https://${rapid7_region}.api.insight.rapid7.com)"
+
+        # Rapid7 API Key
+        local rapid7_api_key=""
+        while [[ -z "$rapid7_api_key" ]]; do
+            read -s -p "Enter Rapid7 Insight API Key: " rapid7_api_key
+            echo ""
+            if [[ -z "$rapid7_api_key" ]]; then
+                log_error "Rapid7 API Key is required"
+            fi
+        done
+
+        # Create Rapid7 secrets
+        if ! create_or_update_secret "rapid7_region" "$rapid7_region"; then
+            log_error "Failed to create Rapid7 region secret"
+            return 1
+        fi
+
+        if ! create_or_update_secret "rapid7_api_key" "$rapid7_api_key"; then
+            log_error "Failed to create Rapid7 API Key secret"
+            return 1
+        fi
+
+        log_success "Rapid7 InsightVM integration configured"
+        echo "  Region: ${rapid7_region}  (https://${rapid7_region}.api.insight.rapid7.com)"
+
+        # Clear from memory
+        unset rapid7_api_key
+    else
+        # Create placeholder secrets to satisfy Docker Compose requirements
+        create_or_update_secret "rapid7_region" "us3"
+        create_or_update_secret "rapid7_api_key" "not_configured"
+        log_info "Rapid7 InsightVM integration disabled"
+    fi
+
+    # ============================================================================
     # CREATE .ENV FILE (NON-SENSITIVE CONFIGURATION)
     # ============================================================================
     
@@ -882,6 +1109,9 @@ EOF
     echo "  MS Defender:      $([ "$mde_enabled"            = "true" ] && echo "✓ Enabled" || echo "✗ Disabled")"
     echo "  Automox:          $([ "$automox_enabled"        = "true" ] && echo "✓ Enabled" || echo "✗ Disabled")"
     echo "  Wiz:              $([ "$wiz_enabled"            = "true" ] && echo "✓ Enabled" || echo "✗ Disabled")"
+    echo "  SentinelOne:      $([ "$sentinelone_enabled"    = "true" ] && echo "✓ Enabled" || echo "✗ Disabled")"
+    echo "  TrendMicro V1:    $([ "$trendmicro_enabled"     = "true" ] && echo "✓ Enabled" || echo "✗ Disabled")"
+    echo "  Rapid7 InsightVM: $([ "$rapid7_enabled"         = "true" ] && echo "✓ Enabled" || echo "✗ Disabled")"
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     
@@ -994,6 +1224,12 @@ validate_configuration() {
             "wiz_client_id"
             "wiz_client_secret"
             "wiz_api_endpoint_url"
+            "sentinelone_api_url"
+            "sentinelone_api_token"
+            "trendmicro_api_key"
+            "trendmicro_api_url"
+            "rapid7_api_key"
+            "rapid7_region"
         )
         for secret in "${integration_secrets[@]}"; do
             if docker secret ls --format "{{.Name}}" 2>/dev/null | grep -q "^${secret}$"; then
