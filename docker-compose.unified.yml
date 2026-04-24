@@ -117,6 +117,10 @@ services:
       - rapid7_api_key
       - rapid7_region
       
+      # Sevco (Arctic Wolf) Integration
+      - sevco_api_token
+      - sevco_org_id
+      
       # Optional Tools
       - optional_tools
       - vulncheck_api_key
@@ -328,6 +332,12 @@ secrets:
   rapid7_api_key:
     external: true
   rapid7_region:
+    external: true
+  
+  # Sevco (Arctic Wolf) credentials
+  sevco_api_token:
+    external: true
+  sevco_org_id:
     external: true
   
   # Optional integrations

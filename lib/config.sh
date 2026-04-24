@@ -63,6 +63,7 @@ interactive_simple_setup() {
     local sentinelone_enabled="false"
     local trendmicro_enabled="false"
     local rapid7_enabled="false"
+    local sevco_enabled="false"
     
     # ============================================================================
     # CORE VICARIUS CONFIGURATION
@@ -995,6 +996,64 @@ interactive_simple_setup() {
         log_info "Rapid7 InsightVM integration disabled"
     fi
 
+
+    # ============================================================================
+    # SEVCO (ARCTIC WOLF) INTEGRATION
+    # ============================================================================
+    echo ""
+    echo -e "${BOLD}Sevco (Arctic Wolf) Integration${NC}"
+    echo "Sevco provides unified asset intelligence and vulnerability correlation."
+    echo "You will need a Sevco API token and your Organization ID."
+    echo ""
+
+    read -p "Enable Sevco (Arctic Wolf) integration? [y/N]: " enable_sevco
+
+    if [[ "$enable_sevco" =~ ^[Yy] ]]; then
+        sevco_enabled="true"
+
+        # Sevco Organization ID
+        local sevco_org_id=""
+        while [[ -z "$sevco_org_id" ]]; do
+            read -p "Enter Sevco Organization ID: " sevco_org_id
+            if [[ -z "$sevco_org_id" ]]; then
+                log_error "Sevco Organization ID is required"
+            fi
+        done
+
+        # Sevco API Token
+        local sevco_api_token=""
+        while [[ -z "$sevco_api_token" ]]; do
+            read -s -p "Enter Sevco API Token: " sevco_api_token
+            echo ""
+            if [[ -z "$sevco_api_token" ]]; then
+                log_error "Sevco API Token is required"
+            fi
+        done
+
+        # Create Sevco secrets
+        if ! create_or_update_secret "sevco_org_id" "$sevco_org_id"; then
+            log_error "Failed to create Sevco Organization ID secret"
+            return 1
+        fi
+
+        if ! create_or_update_secret "sevco_api_token" "$sevco_api_token"; then
+            log_error "Failed to create Sevco API Token secret"
+            return 1
+        fi
+
+        log_success "Sevco (Arctic Wolf) integration configured"
+        echo "  Organization ID: ${sevco_org_id}"
+
+        # Clear from memory
+        unset sevco_api_token
+        unset sevco_org_id
+    else
+        # Create placeholder secrets to satisfy Docker Compose requirements
+        create_or_update_secret "sevco_org_id" "not_configured"
+        create_or_update_secret "sevco_api_token" "not_configured"
+        log_info "Sevco (Arctic Wolf) integration disabled"
+    fi
+
     # ============================================================================
     # CREATE .ENV FILE (NON-SENSITIVE CONFIGURATION)
     # ============================================================================
@@ -1112,6 +1171,7 @@ EOF
     echo "  SentinelOne:      $([ "$sentinelone_enabled"    = "true" ] && echo "✓ Enabled" || echo "✗ Disabled")"
     echo "  TrendMicro V1:    $([ "$trendmicro_enabled"     = "true" ] && echo "✓ Enabled" || echo "✗ Disabled")"
     echo "  Rapid7 InsightVM: $([ "$rapid7_enabled"         = "true" ] && echo "✓ Enabled" || echo "✗ Disabled")"
+  echo "  Sevco Arct Wolf:  $([ "$sevco_enabled"          = "true" ] && echo "✓ Enabled" || echo "✗ Disabled")"
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     
@@ -1230,6 +1290,8 @@ validate_configuration() {
             "trendmicro_api_url"
             "rapid7_api_key"
             "rapid7_region"
+            "sevco_api_token"
+            "sevco_org_id"
         )
         for secret in "${integration_secrets[@]}"; do
             if docker secret ls --format "{{.Name}}" 2>/dev/null | grep -q "^${secret}$"; then

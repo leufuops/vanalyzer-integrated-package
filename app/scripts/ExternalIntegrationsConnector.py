@@ -3190,6 +3190,261 @@ def check_create_table_rapid7_remediation(host, port, user, password, database):
     conn.close()
 
 
+
+# ============================================================================
+# SEVCO (ARCTIC WOLF) TABLES
+# ============================================================================
+
+def check_create_table_sevco_etl_runs(host, port, user, password, database):
+    conn = psycopg2.connect(host=host, port=port, user=user, password=password, database=database)
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    create_table_query = """
+    CREATE TABLE IF NOT EXISTS public.sevco_etl_runs (
+        run_id             BIGSERIAL   PRIMARY KEY,
+        started_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+        finished_at        TIMESTAMPTZ,
+        status             TEXT        NOT NULL DEFAULT 'running'
+                                       CHECK (status IN ('running','success','partial','error')),
+        rows_devices       INTEGER     NOT NULL DEFAULT 0,
+        rows_vulns         INTEGER     NOT NULL DEFAULT 0,
+        rows_events        INTEGER     NOT NULL DEFAULT 0,
+        rows_vuln_devices  INTEGER     NOT NULL DEFAULT 0,
+        error_message      TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_sevco_etl_runs_started ON public.sevco_etl_runs(started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_sevco_etl_runs_status  ON public.sevco_etl_runs(status);
+    """
+
+    cur.execute(create_table_query)
+    print("The table 'sevco_etl_runs' was created or already exists")
+
+    cur.close()
+    conn.close()
+
+
+def check_create_table_sevco_device(host, port, user, password, database):
+    conn = psycopg2.connect(host=host, port=port, user=user, password=password, database=database)
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    create_table_query = """
+    CREATE TABLE IF NOT EXISTS public.sevco_device (
+        device_id              TEXT        PRIMARY KEY,
+        run_id                 BIGINT      REFERENCES public.sevco_etl_runs(run_id) ON DELETE SET NULL,
+        org_id                 TEXT,
+        correlation_id         TEXT,
+        hostname               TEXT,
+        hostname_norm          TEXT GENERATED ALWAYS AS (lower(split_part(trim(coalesce(hostname,'')),'.', 1))) STORED,
+        primary_ip             TEXT,
+        internal_ips           TEXT[]      NOT NULL DEFAULT '{}',
+        external_ips           TEXT[]      NOT NULL DEFAULT '{}',
+        all_ips                TEXT[]      NOT NULL DEFAULT '{}',
+        mac_addresses          TEXT[]      NOT NULL DEFAULT '{}',
+        mac_manufacturers      TEXT[]      NOT NULL DEFAULT '{}',
+        os                     TEXT,
+        os_platform            TEXT,
+        os_release             TEXT,
+        os_version             TEXT,
+        os_end_of_life_at      TIMESTAMPTZ,
+        manufacturer           TEXT,
+        model                  TEXT,
+        serial_number          TEXT,
+        encryption_status      BOOLEAN,
+        asset_category         TEXT,
+        asset_sub_category     TEXT,
+        associated_usernames   TEXT[]      NOT NULL DEFAULT '{}',
+        controls               TEXT[]      NOT NULL DEFAULT '{}',
+        geo_city               TEXT,
+        geo_country            TEXT,
+        geo_country_code       TEXT,
+        geo_latitude           NUMERIC(9,4),
+        geo_longitude          NUMERIC(9,4),
+        source_ids             TEXT[]      NOT NULL DEFAULT '{}',
+        source_config_ids      TEXT[]      NOT NULL DEFAULT '{}',
+        source_count           INTEGER     NOT NULL DEFAULT 0,
+        days_active            INTEGER,
+        days_since_last_activity INTEGER,
+        first_observed_at      TIMESTAMPTZ,
+        last_observed_at       TIMESTAMPTZ,
+        last_activity_at       TIMESTAMPTZ,
+        raw                    JSONB,
+        ingested_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_sevco_device_hostname_norm    ON public.sevco_device(hostname_norm);
+    CREATE INDEX IF NOT EXISTS idx_sevco_device_primary_ip       ON public.sevco_device(primary_ip);
+    CREATE INDEX IF NOT EXISTS idx_sevco_device_os_platform      ON public.sevco_device(os_platform);
+    CREATE INDEX IF NOT EXISTS idx_sevco_device_all_ips_gin      ON public.sevco_device USING GIN (all_ips);
+    CREATE INDEX IF NOT EXISTS idx_sevco_device_source_ids_gin   ON public.sevco_device USING GIN (source_ids);
+    CREATE INDEX IF NOT EXISTS idx_sevco_device_controls_gin     ON public.sevco_device USING GIN (controls);
+    CREATE INDEX IF NOT EXISTS idx_sevco_device_last_observed    ON public.sevco_device(last_observed_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_sevco_device_raw_gin          ON public.sevco_device USING GIN (raw);
+    """
+
+    cur.execute(create_table_query)
+    print("The table 'sevco_device' was created or already exists")
+
+    cur.close()
+    conn.close()
+
+
+def check_create_table_sevco_vuln(host, port, user, password, database):
+    conn = psycopg2.connect(host=host, port=port, user=user, password=password, database=database)
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    create_table_query = """
+    CREATE TABLE IF NOT EXISTS public.sevco_vuln (
+        id                         BIGSERIAL   PRIMARY KEY,
+        run_id                     BIGINT      REFERENCES public.sevco_etl_runs(run_id) ON DELETE SET NULL,
+        vuln_id                    TEXT        NOT NULL,
+        source_config_id           TEXT,
+        source_platform_id         TEXT,
+        source_native_id           TEXT,
+        org_id                     TEXT,
+        correlation_id             TEXT,
+        cve_id                     TEXT,
+        sevco_vuln_id              TEXT,
+        severity                   TEXT,
+        cvss_severity              TEXT,
+        cvss3_base_score           NUMERIC(5,2),
+        cvss3_temporal_score       NUMERIC(5,2),
+        composite_cvss_score       NUMERIC(5,2),
+        epss_score                 NUMERIC(8,5),
+        epss_percentile            NUMERIC(8,5),
+        nvd_vuln_status            TEXT,
+        description                TEXT,
+        solution                   TEXT,
+        port                       INTEGER,
+        protocol                   TEXT,
+        product                    TEXT[]      NOT NULL DEFAULT '{}',
+        product_type               TEXT,
+        vendor                     TEXT[]      NOT NULL DEFAULT '{}',
+        cisa_kev_exploit_add       TIMESTAMPTZ,
+        vulncheck_kev_exploit_add  TIMESTAMPTZ,
+        public_exploit_found       BOOLEAN,
+        commercial_exploit_found   BOOLEAN,
+        weaponized_exploit_found   BOOLEAN,
+        exploits_count             INTEGER,
+        max_exploit_maturity       TEXT,
+        exploit_availabilities     TEXT[]      NOT NULL DEFAULT '{}',
+        exploit_maturities         TEXT[]      NOT NULL DEFAULT '{}',
+        botnets                    TEXT[]      NOT NULL DEFAULT '{}',
+        botnets_count              INTEGER     NOT NULL DEFAULT 0,
+        ransomware                 TEXT[]      NOT NULL DEFAULT '{}',
+        ransomware_families_count  INTEGER     NOT NULL DEFAULT 0,
+        threat_actors_count        INTEGER     NOT NULL DEFAULT 0,
+        cwe_ids                    TEXT[]      NOT NULL DEFAULT '{}',
+        mitre_technique_ids        TEXT[]      NOT NULL DEFAULT '{}',
+        capec_ids                  TEXT[]      NOT NULL DEFAULT '{}',
+        ssvc_exploitation          TEXT,
+        ssvc_automatable           TEXT,
+        ssvc_technical_impact      TEXT,
+        categories                 TEXT[]      NOT NULL DEFAULT '{}',
+        source_ids                 TEXT[]      NOT NULL DEFAULT '{}',
+        source_config_ids          TEXT[]      NOT NULL DEFAULT '{}',
+        source_count               INTEGER     NOT NULL DEFAULT 0,
+        first_found_at             TIMESTAMPTZ,
+        last_found_at              TIMESTAMPTZ,
+        first_observed_at          TIMESTAMPTZ,
+        last_observed_at           TIMESTAMPTZ,
+        raw                        JSONB,
+        ingested_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (vuln_id, source_config_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_sevco_vuln_cve_id        ON public.sevco_vuln(cve_id);
+    CREATE INDEX IF NOT EXISTS idx_sevco_vuln_source_cfg    ON public.sevco_vuln(source_config_id);
+    CREATE INDEX IF NOT EXISTS idx_sevco_vuln_platform      ON public.sevco_vuln(source_platform_id);
+    CREATE INDEX IF NOT EXISTS idx_sevco_vuln_severity      ON public.sevco_vuln(severity);
+    CREATE INDEX IF NOT EXISTS idx_sevco_vuln_cvss3         ON public.sevco_vuln(cvss3_base_score DESC NULLS LAST);
+    CREATE INDEX IF NOT EXISTS idx_sevco_vuln_epss          ON public.sevco_vuln(epss_score DESC NULLS LAST);
+    CREATE INDEX IF NOT EXISTS idx_sevco_vuln_cisa_kev      ON public.sevco_vuln(cisa_kev_exploit_add) WHERE cisa_kev_exploit_add IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_sevco_vuln_weaponized    ON public.sevco_vuln(weaponized_exploit_found) WHERE weaponized_exploit_found = true;
+    CREATE INDEX IF NOT EXISTS idx_sevco_vuln_mitre_gin     ON public.sevco_vuln USING GIN (mitre_technique_ids);
+    CREATE INDEX IF NOT EXISTS idx_sevco_vuln_botnets_gin   ON public.sevco_vuln USING GIN (botnets);
+    CREATE INDEX IF NOT EXISTS idx_sevco_vuln_last_found    ON public.sevco_vuln(last_found_at DESC);
+    """
+
+    cur.execute(create_table_query)
+    print("The table 'sevco_vuln' was created or already exists")
+
+    cur.close()
+    conn.close()
+
+
+def check_create_table_sevco_device_event(host, port, user, password, database):
+    conn = psycopg2.connect(host=host, port=port, user=user, password=password, database=database)
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    create_table_query = """
+    CREATE TABLE IF NOT EXISTS public.sevco_device_event (
+        object_id              TEXT        PRIMARY KEY,
+        run_id                 BIGINT      REFERENCES public.sevco_etl_runs(run_id) ON DELETE SET NULL,
+        asset_id               TEXT,
+        org_id                 TEXT,
+        event_type             TEXT,
+        attribute              TEXT,
+        value                  TEXT,
+        source                 TEXT,
+        config_id              TEXT,
+        execution_id           TEXT,
+        hostnames              TEXT[]      NOT NULL DEFAULT '{}',
+        ip_addresses           TEXT[]      NOT NULL DEFAULT '{}',
+        mac_addresses          TEXT[]      NOT NULL DEFAULT '{}',
+        event_at               TIMESTAMPTZ,
+        object_version         TIMESTAMPTZ,
+        ingested_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_sevco_device_event_asset_id      ON public.sevco_device_event(asset_id);
+    CREATE INDEX IF NOT EXISTS idx_sevco_device_event_event_at      ON public.sevco_device_event(event_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_sevco_device_event_type          ON public.sevco_device_event(event_type);
+    CREATE INDEX IF NOT EXISTS idx_sevco_device_event_attribute     ON public.sevco_device_event(attribute);
+    CREATE INDEX IF NOT EXISTS idx_sevco_device_event_hostnames_gin ON public.sevco_device_event USING GIN (hostnames);
+    """
+
+    cur.execute(create_table_query)
+    print("The table 'sevco_device_event' was created or already exists")
+
+    cur.close()
+    conn.close()
+
+
+def check_create_table_sevco_vuln_device(host, port, user, password, database):
+    conn = psycopg2.connect(host=host, port=port, user=user, password=password, database=database)
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    create_table_query = """
+    CREATE TABLE IF NOT EXISTS public.sevco_vuln_device (
+        id           BIGSERIAL   PRIMARY KEY,
+        run_id       BIGINT      REFERENCES public.sevco_etl_runs(run_id) ON DELETE SET NULL,
+        cve_id       TEXT        NOT NULL,
+        device_id    TEXT        NOT NULL,
+        hostname     TEXT,
+        hostname_norm TEXT GENERATED ALWAYS AS (lower(split_part(trim(coalesce(hostname,'')),'.', 1))) STORED,
+        os_platform  TEXT,
+        os_version   TEXT,
+        primary_ip   TEXT,
+        source_ids   TEXT[]      NOT NULL DEFAULT '{}',
+        ingested_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (cve_id, device_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_svd_cve_id        ON public.sevco_vuln_device(cve_id);
+    CREATE INDEX IF NOT EXISTS idx_svd_device_id     ON public.sevco_vuln_device(device_id);
+    CREATE INDEX IF NOT EXISTS idx_svd_hostname_norm ON public.sevco_vuln_device(hostname_norm);
+    CREATE INDEX IF NOT EXISTS idx_svd_os_platform   ON public.sevco_vuln_device(os_platform);
+    CREATE INDEX IF NOT EXISTS idx_svd_run_id        ON public.sevco_vuln_device(run_id);
+    """
+
+    cur.execute(create_table_query)
+    print("The table 'sevco_vuln_device' was created or already exists")
+
+    cur.close()
+    conn.close()
+
+
 # ============================================================================
 # MASTER FUNCTION TO CREATE ALL EXTERNAL INTEGRATION TABLES
 # ============================================================================
@@ -3286,6 +3541,14 @@ def check_create_all_external_integration_tables(host, port, user, password, dat
     check_create_table_rapid7_asset(host, port, user, password, database)
     check_create_table_rapid7_vuln_finding(host, port, user, password, database)
     check_create_table_rapid7_remediation(host, port, user, password, database)
+
+    # Sevco (Arctic Wolf) tables (order matters due to foreign keys)
+    print("\n--- Creating Sevco (Arctic Wolf) tables ---")
+    check_create_table_sevco_etl_runs(host, port, user, password, database)
+    check_create_table_sevco_device(host, port, user, password, database)
+    check_create_table_sevco_vuln(host, port, user, password, database)
+    check_create_table_sevco_device_event(host, port, user, password, database)
+    check_create_table_sevco_vuln_device(host, port, user, password, database)
 
     ct = datetime.now()
     print("\n" + str(ct) + " All external integration tables created successfully!")
